@@ -1,6 +1,7 @@
 import { App, ItemView, MarkdownRenderer, Notice, setIcon, TFile, TFolder, WorkspaceLeaf } from "obsidian";
 import { AgentToolExecution, AgentToolExecutor, ChatIntent, ChatRunMode, ChatSearchScope, ChatSearchScopeMode, DebugLogEntry, PendingEdit, SearchResult, WorkingSetItem } from "../core/types";
 import { ObsidianMcpServer, summarizePendingEdit } from "../mcp/obsidianMcpServer";
+import { RemoteMcpManager } from "../mcp/remoteMcpClient";
 import { AIChatClient } from "../services/aiChatClient";
 import { addMentionInstructions, ChatMention, formatMention, getMentionTrigger, MentionKind, parseMentions } from "./mentions";
 
@@ -49,6 +50,8 @@ export class ChatView extends ItemView {
     leaf: WorkspaceLeaf,
     private readonly aiChatClient: AIChatClient,
     private readonly agentTools: AgentToolExecutor,
+    private readonly remoteMcpManager: RemoteMcpManager,
+    private readonly getDeveloperMode: () => boolean,
     defaultIntent: ChatIntent,
   ) {
     super(leaf);
@@ -69,6 +72,13 @@ export class ChatView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.containerEl.addClass("vault-chat-agent-view");
+    this.render();
+  }
+
+  refreshDeveloperMode(): void {
+    if (!this.getDeveloperMode()) {
+      this.expandedPanels.debug = false;
+    }
     this.render();
   }
 
@@ -93,27 +103,31 @@ export class ChatView extends ItemView {
 
     const toolbar = this.containerEl.createDiv({ cls: "vault-chat-agent-toolbar" });
     this.renderIntentControl(toolbar);
-    this.renderPlanControl(toolbar);
-    this.renderScopeControl(toolbar);
+    if (this.getDeveloperMode()) {
+      this.renderPlanControl(toolbar);
+      this.renderScopeControl(toolbar);
+    }
 
-    const debugButton = toolbar.createEl("button", {
-      cls: this.expandedPanels.debug ? "vault-chat-agent-toolbar-button is-active" : "vault-chat-agent-toolbar-button",
-      attr: { "aria-label": "Show debug log" },
-    });
-    setIcon(debugButton, "bug");
-    debugButton.onclick = () => {
-      this.expandedPanels.debug = !this.expandedPanels.debug;
-      this.render();
-    };
-
-    const exportButton = toolbar.createEl("button", { cls: "vault-chat-agent-toolbar-button", attr: { "aria-label": "Export chat debug data" } });
-    setIcon(exportButton, "download");
-    exportButton.onclick = () => {
-      void this.exportDebugData().catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        new Notice(message, 6000);
+    if (this.getDeveloperMode()) {
+      const debugButton = toolbar.createEl("button", {
+        cls: this.expandedPanels.debug ? "vault-chat-agent-toolbar-button is-active" : "vault-chat-agent-toolbar-button",
+        attr: { "aria-label": "Show debug log" },
       });
-    };
+      setIcon(debugButton, "bug");
+      debugButton.onclick = () => {
+        this.expandedPanels.debug = !this.expandedPanels.debug;
+        this.render();
+      };
+
+      const exportButton = toolbar.createEl("button", { cls: "vault-chat-agent-toolbar-button", attr: { "aria-label": "Export chat debug data" } });
+      setIcon(exportButton, "download");
+      exportButton.onclick = () => {
+        void this.exportDebugData().catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          new Notice(message, 6000);
+        });
+      };
+    }
 
     const clearButton = toolbar.createEl("button", { attr: { "aria-label": "Clear chat" } });
     setIcon(clearButton, "trash-2");
@@ -148,15 +162,15 @@ export class ChatView extends ItemView {
       this.renderPendingEdits();
     }
 
-    if (this.workingSet.length > 0) {
+    if (this.getDeveloperMode() && this.workingSet.length > 0) {
       this.renderWorkingSet();
     }
 
-    if (this.lastSources.length > 0) {
+    if (this.getDeveloperMode() && this.lastSources.length > 0) {
       this.renderSources();
     }
 
-    if (this.expandedPanels.debug || this.debugLogs.length > 0) {
+    if (this.getDeveloperMode() && (this.expandedPanels.debug || this.debugLogs.length > 0)) {
       this.renderDebugLog();
     }
 
@@ -372,8 +386,12 @@ export class ChatView extends ItemView {
     const actions = body.createDiv({ cls: "vault-chat-agent-panel-actions" });
     const copyButton = actions.createEl("button", { text: "Copy JSON" });
     const exportButton = actions.createEl("button", { cls: "mod-cta", text: "Export JSON" });
+    const copyTextButton = actions.createEl("button", { text: "Copy text" });
+    const exportTextButton = actions.createEl("button", { cls: "mod-cta", text: "Export text" });
     copyButton.disabled = this.debugLogs.length === 0 && this.messages.length === 0;
     exportButton.disabled = copyButton.disabled;
+    copyTextButton.disabled = copyButton.disabled;
+    exportTextButton.disabled = copyButton.disabled;
 
     copyButton.onclick = () => {
       void this.copyDebugData().catch((error) => {
@@ -383,6 +401,18 @@ export class ChatView extends ItemView {
     };
     exportButton.onclick = () => {
       void this.exportDebugData().catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        new Notice(message, 6000);
+      });
+    };
+    copyTextButton.onclick = () => {
+      void this.copyDebugTextLog().catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        new Notice(message, 6000);
+      });
+    };
+    exportTextButton.onclick = () => {
+      void this.exportDebugTextLog().catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         new Notice(message, 6000);
       });
@@ -578,6 +608,11 @@ export class ChatView extends ItemView {
     try {
       this.statusText = this.intent === "edit" && this.runMode === "plan" ? "Planning reviewed changes..." : this.intent === "edit" ? "Preparing reviewed changes..." : "Inspecting the vault...";
       this.render();
+      await this.remoteMcpManager.refreshEnabledServers();
+      const mcpErrors = this.remoteMcpManager.getErrors();
+      if (mcpErrors.length > 0) {
+        new Notice(`Vault Chat Agent: MCP connection failed. ${mcpErrors[0]}`, 7000);
+      }
       const searchScope = this.createSearchScope();
       const result = await this.aiChatClient.completeWithAgent(
         agentContent,
@@ -600,6 +635,7 @@ export class ChatView extends ItemView {
             ...(this.intent === "edit" && this.runMode !== "plan" ? (["propose_edit"] as const) : []),
             ...(allowApplyTools ? (["apply_edit"] as const) : []),
           ],
+          externalToolNames: this.remoteMcpManager.getToolNames(),
         },
         this.abortController.signal,
       );
@@ -632,6 +668,7 @@ export class ChatView extends ItemView {
       this.agentTools,
       (id) => this.applyPendingEditTool(id),
       () => this.applyAllPendingEditsTool(),
+      this.remoteMcpManager,
     );
   }
 
@@ -755,6 +792,11 @@ export class ChatView extends ItemView {
     new Notice("Copied debug JSON.", 3000);
   }
 
+  private async copyDebugTextLog(): Promise<void> {
+    await navigator.clipboard.writeText(this.buildDebugTextLog());
+    new Notice("Copied debug text log.", 3000);
+  }
+
   private async exportDebugData(): Promise<void> {
     const folderPath = "Vault Chat Agent Debug";
     await this.ensureFolder(folderPath);
@@ -762,6 +804,15 @@ export class ChatView extends ItemView {
     const path = `${folderPath}/chat-debug-${timestamp}.json`;
     await this.app.vault.create(path, JSON.stringify(this.buildDebugExport(), null, 2));
     new Notice(`Exported debug data: ${path}`, 5000);
+  }
+
+  private async exportDebugTextLog(): Promise<void> {
+    const folderPath = "Vault Chat Agent Debug";
+    await this.ensureFolder(folderPath);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const path = `${folderPath}/chat-log-${timestamp}.txt`;
+    await this.app.vault.create(path, this.buildDebugTextLog());
+    new Notice(`Exported debug text log: ${path}`, 5000);
   }
 
   private buildDebugExport(): Record<string, unknown> {
@@ -776,6 +827,32 @@ export class ChatView extends ItemView {
       workingSet: this.workingSet,
       debugLogs: this.debugLogs,
     };
+  }
+
+  private buildDebugTextLog(): string {
+    const lines = [
+      `[AI-Chat] Exported: ${new Date().toISOString()}`,
+      `[AI-Chat] Intent: ${this.intent}; runMode: ${this.runMode}; isSending: ${this.isSending}`,
+      "",
+      "[AI-Chat] Messages",
+      ...this.messages.flatMap((message, index) => [
+        `[AI-Chat] Message ${index + 1} role=${message.role}${message.error ? " error=true" : ""}`,
+        message.content,
+        "",
+      ]),
+      "[AI-Chat] Working set",
+      ...(this.workingSet.length ? this.workingSet.map((item) => `[AI-Chat] ${item.role} ${item.path} - ${item.detail}`) : ["[AI-Chat] none"]),
+      "",
+      "[AI-Chat] Sources",
+      ...(this.lastSources.length ? this.lastSources.map((source) => `[AI-Chat] ${source.chunk.filePath} score=${source.score.toFixed(3)} snippet=${source.chunk.content.slice(0, 300).replace(/\s+/g, " ")}`) : ["[AI-Chat] none"]),
+      "",
+      "[AI-Chat] Pending edits",
+      ...(this.pendingEdits.length ? this.pendingEdits.map((edit) => `[AI-Chat] ${edit.kind} ${edit.path} - ${edit.summary}`) : ["[AI-Chat] none"]),
+      "",
+      "[AI-Chat] Debug events",
+      ...this.debugLogs.flatMap((entry, index) => formatDebugLogEntry(entry, index + 1)),
+    ];
+    return `${lines.join("\n").trim()}\n`;
   }
 
   private async ensureFolder(path: string): Promise<void> {
@@ -796,6 +873,71 @@ function formatDebugTime(timestamp: string): string {
     return timestamp;
   }
   return date.toLocaleTimeString();
+}
+
+function formatDebugLogEntry(entry: DebugLogEntry, index: number): string[] {
+  const prefix = debugPrefix(entry.type);
+  const lines = [
+    `${prefix} #${index} ${entry.timestamp} ${entry.type}: ${entry.summary}`,
+  ];
+
+  const summary = summarizeDebugData(entry.data);
+  if (summary) {
+    lines.push(`${prefix} ${summary}`);
+  }
+  return [...lines, ""];
+}
+
+function debugPrefix(type: DebugLogEntry["type"]): string {
+  if (type === "model-request" || type === "model-response" || type === "model-error") {
+    return "[Model]";
+  }
+  if (type === "tool-call" || type === "tool-result") {
+    return "[Tool]";
+  }
+  return "[AI-Chat]";
+}
+
+function summarizeDebugData(data: unknown): string {
+  if (!isPlainObject(data)) {
+    return stringifyCompact(data, 1000);
+  }
+  const parts: string[] = [];
+  for (const key of ["intent", "runMode", "step", "tool", "answer", "userMessage", "historyLength"]) {
+    const value = data[key];
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      parts.push(`${key}=${stringifyCompact(value, 300)}`);
+    }
+  }
+  if (isPlainObject(data.toolCall)) {
+    const name = typeof data.toolCall.name === "string" ? data.toolCall.name : "";
+    const argumentsJson = typeof data.toolCall.argumentsJson === "string" ? data.toolCall.argumentsJson : "";
+    parts.push(`toolCall=${name}${argumentsJson ? ` args=${argumentsJson}` : ""}`);
+  }
+  if (isPlainObject(data.args)) {
+    parts.push(`args=${stringifyCompact(data.args, 800)}`);
+  }
+  if (isPlainObject(data.result)) {
+    const content = typeof data.result.content === "string" ? data.result.content : stringifyCompact(data.result, 1200);
+    parts.push(`result=${content.replace(/\s+/g, " ").slice(0, 1200)}`);
+  }
+  if (parts.length > 0) {
+    return parts.join("; ");
+  }
+  return stringifyCompact(data, 1200);
+}
+
+function stringifyCompact(value: unknown, maxChars: number): string {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  if (!text) {
+    return "";
+  }
+  const compact = text.replace(/\s+/g, " ");
+  return compact.length <= maxChars ? compact : `${compact.slice(0, maxChars)}...`;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isAbortError(error: unknown): boolean {

@@ -14,7 +14,17 @@ test("ObsidianMcpServer keeps plan mode read-only even if broader capabilities a
 
   deepEqual(
     tools.map((tool) => tool.name),
-    ["searchNotes", "getCurrentNote", "openCurrentNote", "openNote", "listFolder", "getLinks", "getVaultOverview"],
+    [
+      "searchNotes",
+      "getCurrentNote",
+      "openCurrentNote",
+      "openNote",
+      "listFolder",
+      "getLinks",
+      "readUrl",
+      "readYouTubeTranscript",
+      "getVaultOverview",
+    ],
   );
 });
 
@@ -42,6 +52,36 @@ test("ObsidianMcpServer still rejects unknown searchNotes arguments", async () =
   );
 
   equal(result.content, "Invalid arguments for searchNotes: args.outsideScope is not allowed.");
+});
+
+test("ObsidianMcpServer accepts readUrl arguments", async () => {
+  const calls: Array<{ name: string; args: Record<string, unknown>; context?: McpToolCallContext }> = [];
+  const server = createServer(calls);
+  const context: McpToolCallContext = {
+    intent: "ask",
+    pendingEdits: [],
+    allowedCapabilities: ["read"],
+  };
+
+  const result = await server.callTool("readUrl", { url: "https://example.com", maxChars: 5000 }, context);
+
+  equal(result.content, "ok");
+  deepEqual(calls, [{ name: "readUrl", args: { url: "https://example.com", maxChars: 5000 }, context }]);
+});
+
+test("ObsidianMcpServer accepts readYouTubeTranscript arguments", async () => {
+  const calls: Array<{ name: string; args: Record<string, unknown>; context?: McpToolCallContext }> = [];
+  const server = createServer(calls);
+  const context: McpToolCallContext = {
+    intent: "ask",
+    pendingEdits: [],
+    allowedCapabilities: ["read"],
+  };
+
+  const result = await server.callTool("readYouTubeTranscript", { url: "https://youtu.be/video", language: "en" }, context);
+
+  equal(result.content, "ok");
+  deepEqual(calls, [{ name: "readYouTubeTranscript", args: { url: "https://youtu.be/video", language: "en" }, context }]);
 });
 
 function createServer(calls: Array<{ name: string; args: Record<string, unknown>; context?: McpToolCallContext }> = []): ObsidianMcpServer {

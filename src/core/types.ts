@@ -14,6 +14,20 @@ export interface SavedPrompt {
   intent: ChatIntent;
 }
 
+export interface ExternalMcpServerSettings {
+  id: string;
+  name: string;
+  provider: "custom" | "firecrawl";
+  transport: "http" | "stdio";
+  url: string;
+  headers?: Record<string, string>;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  apiKey?: string;
+  enabled: boolean;
+}
+
 export interface ObsidianAIAssistantSettings {
   apiKey: string;
   model: string;
@@ -25,6 +39,8 @@ export interface ObsidianAIAssistantSettings {
   defaultIntent: ChatIntent;
   systemPrompt: string;
   stripReasoningBlocks: boolean;
+  developerMode: boolean;
+  externalMcpServers: ExternalMcpServerSettings[];
   savedPrompts: SavedPrompt[];
 }
 
@@ -100,6 +116,7 @@ export interface McpToolCallContext {
   searchScope?: ChatSearchScope;
   pendingEdits: Array<Pick<PendingEdit, "id" | "path" | "kind" | "summary">>;
   allowedCapabilities: McpToolCapability[];
+  externalToolNames?: string[];
 }
 
 export interface McpToolServer {
@@ -114,7 +131,7 @@ export interface AgentCompletion {
   workingSet: WorkingSetItem[];
 }
 
-export type WorkingSetRole = "current" | "searched" | "opened" | "listed" | "linked" | "edited";
+export type WorkingSetRole = "current" | "searched" | "opened" | "listed" | "linked" | "edited" | "web";
 
 export interface WorkingSetItem {
   path: string;
@@ -159,6 +176,8 @@ export const DEFAULT_SETTINGS: ObsidianAIAssistantSettings = {
   realtimeIndexing: true,
   defaultIntent: "ask",
   stripReasoningBlocks: true,
+  developerMode: false,
   savedPrompts: [],
   systemPrompt: "Assume the user is not a developer. Explain technical details in plain language, avoid unnecessary implementation jargon, and ask before expecting them to make code-level decisions.",
+  externalMcpServers: [],
 };

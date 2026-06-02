@@ -1,4 +1,4 @@
-import { App, TFile, TFolder } from "obsidian";
+import { App, requestUrl, TFile, TFolder } from "obsidian";
 import { AgentToolExecution, ChatSearchScope, IndexedChunk, McpToolCallContext, PendingEdit } from "../core/types";
 import { IndexStore } from "../core/indexStore";
 import { GraphSearchEngine } from "../search/graphSearch";
@@ -7,6 +7,7 @@ import { countOccurrences, createPatchEdit, createSequentialPatchEdits, validate
 const READABLE_EXTENSIONS = new Set(["md", "txt", "csv", "json", "canvas"]);
 const MAX_NEW_NOTE_CHUNK_CHARS = 2500;
 const MAX_NEW_NOTE_TOTAL_CHARS = 200000;
+const MAX_WEB_RESPONSE_CHARS = 750000;
 
 interface NewNoteDraft {
   path: string;
@@ -39,6 +40,10 @@ export class ObsidianAgentTools {
         return this.listFolder(args);
       case "getLinks":
         return this.getLinks(args);
+      case "readUrl":
+        return this.readUrl(args);
+      case "readYouTubeTranscript":
+        return this.readYouTubeTranscript(args);
       case "getVaultOverview":
         return { content: this.indexStore.getVaultOverview(40) };
       case "beginNewNote":
@@ -57,7 +62,7 @@ export class ObsidianAgentTools {
         return this.proposePatchBatch(args);
       default:
         return {
-          content: `Unknown tool: ${toolName}. Available tools: searchNotes, getCurrentNote, openCurrentNote, openNote, listFolder, getLinks, getVaultOverview, beginNewNote, appendNewNote, finishNewNote, proposeNewNote, proposePatch, proposePatchBatch, proposeEdit.`,
+          content: `Unknown tool: ${toolName}. Available tools: searchNotes, getCurrentNote, openCurrentNote, openNote, listFolder, getLinks, readUrl, readYouTubeTranscript, getVaultOverview, beginNewNote, appendNewNote, finishNewNote, proposeNewNote, proposePatch, proposePatchBatch, proposeEdit.`,
         };
     }
   }
@@ -400,6 +405,110 @@ export class ObsidianAgentTools {
     };
   }
 
+  private async readUrl(args: Record<string, unknown>): Promise<AgentToolExecution> {
+    const requestedUrl = getStringArg(args, "url");
+    const maxChars = clampMaxChars(getNumberArg(args, "maxChars") ?? 12000);
+    const url = parseHttpUrl(requestedUrl);
+    if (!url) {
+      return { content: "Missing or invalid URL. Only public http:// and https:// URLs are supported." };
+    }
+
+    const result = await fetchText(url.toString());
+    if (!result.ok) {
+      return { content: `Could not read URL: ${result.error}` };
+    }
+
+    const extracted = extractReadableWebText(result.text, result.contentType, result.url);
+    return {
+      workingSetItems: [{ path: result.url, role: "web", detail: "Read URL content" }],
+      content: [
+        "URL CONTENT",
+        `URL: ${result.url}`,
+        extracted.title ? `Title: ${extracted.title}` : "",
+        `Content-Type: ${result.contentType || "unknown"}`,
+        "",
+        clip(extracted.text, maxChars),
+      ]
+        .filter((line) => line.length > 0)
+        .join("\n"),
+    };
+  }
+
+  private async readYouTubeTranscript(args: Record<string, unknown>): Promise<AgentToolExecution> {
+    const requestedUrl = getStringArg(args, "url");
+    const language = getStringArg(args, "language");
+    const maxChars = clampMaxChars(getNumberArg(args, "maxChars") ?? 16000);
+    const url = parseHttpUrl(requestedUrl);
+    if (!url || !isYouTubeUrl(url)) {
+      return { content: "Missing or invalid YouTube URL." };
+    }
+
+    const videoPage = await fetchText(url.toString());
+    if (!videoPage.ok) {
+      return { content: `Could not read YouTube page: ${videoPage.error}` };
+    }
+
+    const playerResponse = extractYouTubePlayerResponse(videoPage.text);
+    if (!playerResponse) {
+      return {
+        workingSetItems: [{ path: videoPage.url, role: "web", detail: "Tried to inspect YouTube video" }],
+        content: "Could not find YouTube player metadata on the page.",
+      };
+    }
+
+    const captionTracks = getYouTubeCaptionTracks(playerResponse);
+    if (captionTracks.length === 0) {
+      const title = getNestedString(playerResponse, ["videoDetails", "title"]);
+      return {
+        workingSetItems: [{ path: videoPage.url, role: "web", detail: "YouTube video has no available captions" }],
+        content: [
+          "YOUTUBE TRANSCRIPT",
+          `URL: ${videoPage.url}`,
+          title ? `Title: ${title}` : "",
+          "",
+          "No caption tracks were available for this video.",
+        ]
+          .filter((line) => line.length > 0)
+          .join("\n"),
+      };
+    }
+
+    const track = chooseCaptionTrack(captionTracks, language);
+    const transcriptUrl = withCaptionFormat(track.baseUrl, "json3");
+    const transcriptResponse = await fetchText(transcriptUrl);
+    if (!transcriptResponse.ok) {
+      return {
+        workingSetItems: [{ path: videoPage.url, role: "web", detail: "Tried to read YouTube transcript" }],
+        content: `Could not fetch YouTube captions: ${transcriptResponse.error}`,
+      };
+    }
+
+    const transcript = parseYouTubeTranscript(transcriptResponse.text);
+    if (!transcript.trim()) {
+      return {
+        workingSetItems: [{ path: videoPage.url, role: "web", detail: "YouTube transcript was empty" }],
+        content: "YouTube captions were found, but the transcript text was empty or could not be parsed.",
+      };
+    }
+
+    const title = getNestedString(playerResponse, ["videoDetails", "title"]);
+    const author = getNestedString(playerResponse, ["videoDetails", "author"]);
+    return {
+      workingSetItems: [{ path: videoPage.url, role: "web", detail: `Read YouTube transcript (${track.languageCode})` }],
+      content: [
+        "YOUTUBE TRANSCRIPT",
+        `URL: ${videoPage.url}`,
+        title ? `Title: ${title}` : "",
+        author ? `Author: ${author}` : "",
+        `Caption language: ${track.name || track.languageCode}${track.kind === "asr" ? " (auto-generated)" : ""}`,
+        "",
+        clip(transcript, maxChars),
+      ]
+        .filter((line) => line.length > 0)
+        .join("\n"),
+    };
+  }
+
   private async proposeEdit(args: Record<string, unknown>): Promise<AgentToolExecution> {
     const path = getStringArg(args, "path");
     const newContent = getTextArg(args, "newContent");
@@ -563,6 +672,368 @@ function getTextArg(args: Record<string, unknown>, name: string): string | undef
 function getNumberArg(args: Record<string, unknown>, name: string): number | undefined {
   const value = args[name];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+interface FetchTextResult {
+  ok: boolean;
+  url: string;
+  contentType: string;
+  text: string;
+  error?: string;
+}
+
+interface ReadableWebText {
+  title?: string;
+  text: string;
+}
+
+interface YouTubeCaptionTrack {
+  baseUrl: string;
+  languageCode: string;
+  name: string;
+  kind?: string;
+}
+
+function parseHttpUrl(value: string | undefined): URL | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+function isYouTubeUrl(url: URL): boolean {
+  const hostname = url.hostname.toLowerCase().replace(/^www\./, "");
+  return hostname === "youtube.com" || hostname === "m.youtube.com" || hostname === "music.youtube.com" || hostname === "youtu.be";
+}
+
+async function fetchText(url: string): Promise<FetchTextResult> {
+  try {
+    const response = await requestUrl({
+      url,
+      method: "GET",
+      headers: {
+        Accept: "text/html,text/plain,application/json,application/xml,text/xml,*/*",
+      },
+      throw: false,
+    });
+    const contentType = getHeader(response.headers, "content-type");
+    if (response.status >= 400) {
+      return {
+        ok: false,
+        url,
+        contentType,
+        text: "",
+        error: `HTTP ${response.status}`,
+      };
+    }
+
+    const text = response.text;
+    return {
+      ok: true,
+      url,
+      contentType,
+      text: text.length > MAX_WEB_RESPONSE_CHARS ? text.slice(0, MAX_WEB_RESPONSE_CHARS) : text,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      url,
+      contentType: "",
+      text: "",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function extractReadableWebText(content: string, contentType: string, url: string): ReadableWebText {
+  const normalizedContentType = contentType.toLowerCase();
+  if (normalizedContentType.includes("text/html") || looksLikeHtml(content)) {
+    return extractHtmlText(content);
+  }
+  if (normalizedContentType.includes("json")) {
+    return { title: url, text: prettyJson(content) };
+  }
+  return { title: url, text: normalizeWhitespace(decodeHtmlEntities(content)) };
+}
+
+function getHeader(headers: Record<string, string>, name: string): string {
+  const expected = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === expected) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function looksLikeHtml(content: string): boolean {
+  return /<!doctype html|<html[\s>]|<body[\s>]/i.test(content.slice(0, 1000));
+}
+
+function extractHtmlText(html: string): ReadableWebText {
+  const title = decodeHtmlEntities(matchFirst(html, /<title[^>]*>([\s\S]*?)<\/title>/i) ?? "").trim();
+  if (typeof DOMParser !== "undefined") {
+    try {
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      for (const node of Array.from(doc.querySelectorAll("script, style, noscript, svg, nav, footer, header, form, iframe"))) {
+        node.remove();
+      }
+      const main = doc.querySelector("article, main, [role='main']") ?? doc.body;
+      return {
+        title: doc.title.trim() || title,
+        text: normalizeWhitespace(main?.textContent ?? ""),
+      };
+    } catch {
+      return { title, text: extractHtmlTextWithRegex(html) };
+    }
+  }
+  return { title, text: extractHtmlTextWithRegex(html) };
+}
+
+function extractHtmlTextWithRegex(html: string): string {
+  return normalizeWhitespace(
+    decodeHtmlEntities(
+      html
+        .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+        .replace(/<noscript\b[\s\S]*?<\/noscript>/gi, " ")
+        .replace(/<svg\b[\s\S]*?<\/svg>/gi, " ")
+        .replace(/<\/(p|div|li|h[1-6]|tr|section|article|main)>/gi, "\n")
+        .replace(/<[^>]+>/g, " "),
+    ),
+  );
+}
+
+function prettyJson(content: string): string {
+  try {
+    return JSON.stringify(JSON.parse(content) as unknown, null, 2);
+  } catch {
+    return normalizeWhitespace(content);
+  }
+}
+
+function extractYouTubePlayerResponse(html: string): Record<string, unknown> | null {
+  const markers = ["ytInitialPlayerResponse =", "ytInitialPlayerResponse="];
+  for (const marker of markers) {
+    const index = html.indexOf(marker);
+    if (index < 0) {
+      continue;
+    }
+    const objectStart = html.indexOf("{", index + marker.length);
+    if (objectStart < 0) {
+      continue;
+    }
+    const json = extractBalancedJsonObject(html, objectStart);
+    if (!json) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(json) as unknown;
+      if (isRecord(parsed)) {
+        return parsed;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function extractBalancedJsonObject(value: string, start: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let index = start; index < value.length; index += 1) {
+    const char = value[index];
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (char === "\\") {
+        escape = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return value.slice(start, index + 1);
+      }
+    }
+  }
+  return null;
+}
+
+function getYouTubeCaptionTracks(playerResponse: Record<string, unknown>): YouTubeCaptionTrack[] {
+  const tracks = getNestedValue(playerResponse, ["captions", "playerCaptionsTracklistRenderer", "captionTracks"]);
+  if (!Array.isArray(tracks)) {
+    return [];
+  }
+  return tracks.flatMap((track): YouTubeCaptionTrack[] => {
+    if (!isRecord(track)) {
+      return [];
+    }
+    const baseUrl = typeof track.baseUrl === "string" ? track.baseUrl : "";
+    const languageCode = typeof track.languageCode === "string" ? track.languageCode : "";
+    if (!baseUrl || !languageCode) {
+      return [];
+    }
+    return [
+      {
+        baseUrl,
+        languageCode,
+        name: extractCaptionTrackName(track) || languageCode,
+        kind: typeof track.kind === "string" ? track.kind : undefined,
+      },
+    ];
+  });
+}
+
+function extractCaptionTrackName(track: Record<string, unknown>): string {
+  const simpleText = getNestedString(track, ["name", "simpleText"]);
+  if (simpleText) {
+    return simpleText;
+  }
+  const runs = getNestedValue(track, ["name", "runs"]);
+  if (!Array.isArray(runs)) {
+    return "";
+  }
+  return runs
+    .map((run) => (isRecord(run) && typeof run.text === "string" ? run.text : ""))
+    .join("")
+    .trim();
+}
+
+function chooseCaptionTrack(tracks: YouTubeCaptionTrack[], preferredLanguage: string | undefined): YouTubeCaptionTrack {
+  const preferred = preferredLanguage?.toLowerCase();
+  if (preferred) {
+    const exact = tracks.find((track) => track.languageCode.toLowerCase() === preferred);
+    if (exact) {
+      return exact;
+    }
+    const prefix = tracks.find((track) => track.languageCode.toLowerCase().startsWith(`${preferred}-`));
+    if (prefix) {
+      return prefix;
+    }
+  }
+  return tracks.find((track) => track.kind !== "asr") ?? tracks[0];
+}
+
+function withCaptionFormat(baseUrl: string, format: string): string {
+  try {
+    const url = new URL(baseUrl);
+    url.searchParams.set("fmt", format);
+    return url.toString();
+  } catch {
+    return baseUrl.includes("?") ? `${baseUrl}&fmt=${format}` : `${baseUrl}?fmt=${format}`;
+  }
+}
+
+function parseYouTubeTranscript(content: string): string {
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    if (isRecord(parsed) && Array.isArray(parsed.events)) {
+      return normalizeWhitespace(
+        parsed.events
+          .flatMap((event) => {
+            if (!isRecord(event) || !Array.isArray(event.segs)) {
+              return [];
+            }
+            return event.segs.map((seg) => (isRecord(seg) && typeof seg.utf8 === "string" ? seg.utf8 : ""));
+          })
+          .join(""),
+      );
+    }
+  } catch {
+    return parseXmlTranscript(content);
+  }
+  return parseXmlTranscript(content);
+}
+
+function parseXmlTranscript(content: string): string {
+  if (typeof DOMParser !== "undefined") {
+    try {
+      const doc = new DOMParser().parseFromString(content, "text/xml");
+      return normalizeWhitespace(Array.from(doc.querySelectorAll("text")).map((node) => node.textContent ?? "").join(" "));
+    } catch {
+      return parseXmlTranscriptWithRegex(content);
+    }
+  }
+  return parseXmlTranscriptWithRegex(content);
+}
+
+function parseXmlTranscriptWithRegex(content: string): string {
+  return normalizeWhitespace(
+    Array.from(content.matchAll(/<text\b[^>]*>([\s\S]*?)<\/text>/gi), (match) => decodeHtmlEntities(match[1])).join(" "),
+  );
+}
+
+function getNestedValue(value: unknown, path: string[]): unknown {
+  let current = value;
+  for (const part of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[part];
+  }
+  return current;
+}
+
+function getNestedString(value: unknown, path: string[]): string {
+  const nested = getNestedValue(value, path);
+  return typeof nested === "string" ? nested.trim() : "";
+}
+
+function matchFirst(value: string, pattern: RegExp): string | null {
+  const match = value.match(pattern);
+  return match?.[1] ?? null;
+}
+
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\u00a0/g, " ").replace(/[ \t\r\f\v]+/g, " ").replace(/\n\s+/g, "\n").replace(/\s+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function decodeHtmlEntities(value: string): string {
+  const named: Record<string, string> = {
+    amp: "&",
+    apos: "'",
+    gt: ">",
+    lt: "<",
+    nbsp: " ",
+    quot: '"',
+  };
+  return value.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (entity, raw: string) => {
+    const key = raw.toLowerCase();
+    if (key.startsWith("#x")) {
+      const codePoint = Number.parseInt(key.slice(2), 16);
+      return isValidCodePoint(codePoint) ? String.fromCodePoint(codePoint) : entity;
+    }
+    if (key.startsWith("#")) {
+      const codePoint = Number.parseInt(key.slice(1), 10);
+      return isValidCodePoint(codePoint) ? String.fromCodePoint(codePoint) : entity;
+    }
+    return named[key] ?? entity;
+  });
+}
+
+function isValidCodePoint(value: number): boolean {
+  return Number.isFinite(value) && value >= 0 && value <= 0x10ffff;
+}
+
+function clampMaxChars(value: number): number {
+  return Math.max(1000, Math.min(30000, Math.floor(value)));
 }
 
 function pathExtension(path: string): string {

@@ -1,4 +1,5 @@
 import { AgentToolExecution, AgentToolExecutor, McpToolCallContext, McpToolDefinition, McpToolServer, PendingEdit } from "../core/types";
+import { RemoteMcpManager } from "./remoteMcpClient";
 
 type ApplyPendingEdit = (id: string) => Promise<AgentToolExecution>;
 type ApplyAllPendingEdits = () => Promise<AgentToolExecution>;
@@ -8,12 +9,14 @@ export class ObsidianMcpServer implements McpToolServer {
     private readonly agentTools: AgentToolExecutor,
     private readonly applyPendingEdit: ApplyPendingEdit,
     private readonly applyAllPendingEdits: ApplyAllPendingEdits,
+    private readonly remoteMcpManager?: RemoteMcpManager,
   ) {}
 
   listTools(context: McpToolCallContext): McpToolDefinition[] {
     const isPlanMode = context.intent === "edit" && context.runMode === "plan";
     return [
       ...READ_ONLY_TOOLS,
+      ...(context.externalToolNames ? this.remoteMcpManager?.listTools().filter((tool) => context.externalToolNames?.includes(tool.name)) ?? [] : []),
       ...(!isPlanMode && context.pendingEdits.length > 0 ? APPLY_TOOLS : []),
       ...(!isPlanMode && context.intent === "edit" ? EDIT_TOOLS : []),
     ].filter((tool) => context.allowedCapabilities.includes(tool.capability));
@@ -32,6 +35,13 @@ export class ObsidianMcpServer implements McpToolServer {
 
     if (READ_ONLY_TOOL_NAMES.has(name)) {
       return this.agentTools.execute(name, args, context);
+    }
+
+    if (this.remoteMcpManager?.canCallTool(name)) {
+      if (!context.externalToolNames?.includes(name)) {
+        return { content: `External MCP tool ${name} is not enabled for this turn.` };
+      }
+      return this.remoteMcpManager.callTool(name, args);
     }
 
     if (name === "applyPendingEdit") {
@@ -130,6 +140,31 @@ const READ_ONLY_TOOLS: McpToolDefinition[] = [
         path: { type: "string", description: "Vault-relative file path." },
       },
       ["path"],
+    ),
+  },
+  {
+    name: "readUrl",
+    description: "Fetch a public HTTP/HTTPS URL and extract readable text from HTML, text, JSON, or XML responses.",
+    capability: "read",
+    inputSchema: objectSchema(
+      {
+        url: { type: "string", description: "Public HTTP or HTTPS URL to read." },
+        maxChars: { type: "number", description: "Maximum characters to return." },
+      },
+      ["url"],
+    ),
+  },
+  {
+    name: "readYouTubeTranscript",
+    description: "Extract available captions or transcript text from a YouTube video URL.",
+    capability: "read",
+    inputSchema: objectSchema(
+      {
+        url: { type: "string", description: "YouTube video URL." },
+        language: { type: "string", description: "Preferred caption language code, such as en or ru." },
+        maxChars: { type: "number", description: "Maximum characters to return." },
+      },
+      ["url"],
     ),
   },
   {

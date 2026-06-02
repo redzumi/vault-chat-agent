@@ -1,5 +1,5 @@
 import { App, Notice, PluginSettingTab, Setting, SuggestModal } from "obsidian";
-import { DEFAULT_SETTINGS, SavedPrompt } from "../core/types";
+import { DEFAULT_SETTINGS, ExternalMcpServerSettings, SavedPrompt } from "../core/types";
 import ObsidianAIAssistantPlugin from "../main";
 import { detectProviderPreset, fetchProviderModels, PROVIDER_PRESETS, ProviderPreset } from "./providerSettings";
 
@@ -82,6 +82,17 @@ export class ObsidianAIAssistantSettingTab extends PluginSettingTab {
             button.setDisabled(false);
             button.setButtonText("Browse");
           }
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Developer mode")
+      .setDesc("Show advanced provider, indexing, MCP, and debug controls.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.developerMode).onChange(async (value) => {
+          this.plugin.settings.developerMode = value;
+          await this.plugin.savePluginData();
+          this.plugin.refreshChatViews();
         }),
       );
 
@@ -186,6 +197,202 @@ export class ObsidianAIAssistantSettingTab extends PluginSettingTab {
           this.plugin.configureRealtimeIndexer();
         }),
       );
+
+    containerEl.createEl("h3", { text: "External MCP servers" });
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text: "External MCP servers exposed to the agent as read-only tools. Remote HTTPS and local command transports are supported.",
+    });
+
+    new Setting(containerEl)
+      .setName("Add Firecrawl MCP")
+      .setDesc("Adds Firecrawl's hosted MCP endpoint. Enter the API key in a separate field after adding it.")
+      .addButton((button) =>
+        button
+          .setButtonText("Add Firecrawl")
+          .setCta()
+          .onClick(async () => {
+            this.plugin.settings.externalMcpServers = [
+              ...this.plugin.settings.externalMcpServers,
+              createExternalMcpServer("firecrawl", "", "firecrawl"),
+            ];
+            await this.plugin.savePluginData();
+            this.display();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Add custom MCP")
+      .setDesc("Adds a blank remote MCP server entry.")
+      .addButton((button) =>
+        button.setButtonText("Add server").onClick(async () => {
+          this.plugin.settings.externalMcpServers = [...this.plugin.settings.externalMcpServers, createExternalMcpServer("mcp-server", "https://example.com/mcp", "custom")];
+          await this.plugin.savePluginData();
+          this.display();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Add command MCP")
+      .setDesc("Adds a local stdio MCP server launched with npx -y.")
+      .addButton((button) =>
+        button.setButtonText("Add npx server").onClick(async () => {
+          this.plugin.settings.externalMcpServers = [
+            ...this.plugin.settings.externalMcpServers,
+            createCommandMcpServer("npx-mcp-server", "npx", ["-y", "package-name"]),
+          ];
+          await this.plugin.savePluginData();
+          this.display();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Add local Firecrawl MCP")
+      .setDesc("Adds firecrawl-mcp launched with npx -y. Add FIRECRAWL_API_KEY in env.")
+      .addButton((button) =>
+        button.setButtonText("Add local Firecrawl").onClick(async () => {
+          this.plugin.settings.externalMcpServers = [
+            ...this.plugin.settings.externalMcpServers,
+            createCommandMcpServer("firecrawl-local", "npx", ["-y", "firecrawl-mcp"], { FIRECRAWL_API_KEY: "" }),
+          ];
+          await this.plugin.savePluginData();
+          this.display();
+        }),
+      );
+
+    for (const server of this.plugin.settings.externalMcpServers) {
+      const isFirecrawl = server.provider === "firecrawl";
+      new Setting(containerEl)
+        .setName(isFirecrawl ? "Firecrawl MCP" : "MCP server")
+        .setDesc(server.id)
+        .addToggle((toggle) =>
+          toggle.setValue(server.enabled).onChange(async (value) => {
+            server.enabled = value;
+            await this.plugin.savePluginData();
+            }),
+        )
+        .addText((text) => {
+          text
+            .setPlaceholder("Name")
+            .setValue(server.name)
+            .onChange(async (value) => {
+              server.name = value.trim() || (isFirecrawl ? "firecrawl" : "mcp-server");
+              await this.plugin.savePluginData();
+            });
+          if (isFirecrawl) {
+            text.setDisabled(true);
+          }
+        })
+        .addDropdown((dropdown) => {
+          dropdown
+            .addOption("http", "Remote URL")
+            .addOption("stdio", "Command")
+            .setValue(server.transport)
+            .onChange(async (value) => {
+              server.transport = value === "stdio" ? "stdio" : "http";
+              await this.plugin.savePluginData();
+              this.display();
+            });
+          if (isFirecrawl) {
+            dropdown.setDisabled(true);
+          }
+        })
+        .addButton((button) =>
+          button
+            .setButtonText("Delete")
+            .setWarning()
+            .onClick(async () => {
+              this.plugin.settings.externalMcpServers = this.plugin.settings.externalMcpServers.filter((item) => item.id !== server.id);
+              await this.plugin.savePluginData();
+              this.display();
+            }),
+        );
+
+      if (isFirecrawl) {
+        new Setting(containerEl)
+          .setName("Firecrawl API key")
+          .setDesc("Stored in Obsidian plugin data on this device. The hosted MCP URL is assembled automatically.")
+          .addText((text) => {
+            text.inputEl.type = "password";
+            text
+              .setPlaceholder("fc-...")
+              .setValue(server.apiKey ?? "")
+              .onChange(async (value) => {
+                server.apiKey = value.trim();
+                server.url = "";
+                await this.plugin.savePluginData();
+              });
+          });
+      } else if (server.transport === "stdio") {
+        new Setting(containerEl)
+          .setName("Command")
+          .setDesc("Executable used to launch the MCP server.")
+          .addText((text) =>
+            text
+              .setPlaceholder("npx")
+              .setValue(server.command ?? "")
+              .onChange(async (value) => {
+                server.command = value.trim();
+                await this.plugin.savePluginData();
+              }),
+          );
+
+        new Setting(containerEl)
+          .setName("Arguments")
+          .setDesc("One argument per line. Example: -y then firecrawl-mcp.")
+          .addTextArea((text) => {
+            text.inputEl.rows = 4;
+            text
+              .setPlaceholder("-y\npackage-name")
+              .setValue((server.args ?? []).join("\n"))
+              .onChange(async (value) => {
+                server.args = parseLines(value);
+                await this.plugin.savePluginData();
+              });
+          });
+
+        new Setting(containerEl)
+          .setName("Environment")
+          .setDesc("One KEY=value pair per line. Values are stored in Obsidian plugin data on this device.")
+          .addTextArea((text) => {
+            text.inputEl.rows = 4;
+            text
+              .setPlaceholder("API_KEY=...")
+              .setValue(formatKeyValueLines(server.env))
+              .onChange(async (value) => {
+                server.env = parseKeyValueLines(value);
+                await this.plugin.savePluginData();
+              });
+          });
+      } else {
+        new Setting(containerEl)
+          .setName("MCP URL")
+          .setDesc("Remote HTTPS Streamable HTTP MCP endpoint.")
+          .addText((text) =>
+            text
+              .setPlaceholder("https://...")
+              .setValue(server.url)
+              .onChange(async (value) => {
+                server.url = value.trim();
+                await this.plugin.savePluginData();
+              }),
+          );
+
+        new Setting(containerEl)
+          .setName("Headers")
+          .setDesc("Optional request headers, one KEY=value pair per line.")
+          .addTextArea((text) => {
+            text.inputEl.rows = 3;
+            text
+              .setPlaceholder("Authorization=Bearer ...")
+              .setValue(formatKeyValueLines(server.headers))
+              .onChange(async (value) => {
+                server.headers = parseKeyValueLines(value);
+                await this.plugin.savePluginData();
+              });
+          });
+      }
+    }
 
     containerEl.createEl("h3", { text: "Saved prompts" });
     containerEl.createEl("p", {
@@ -301,6 +508,64 @@ function createSavedPrompt(): SavedPrompt {
     prompt: "",
     intent: "ask",
   };
+}
+
+function createExternalMcpServer(name: string, url: string, provider: ExternalMcpServerSettings["provider"]): ExternalMcpServerSettings {
+  return {
+    id: `${name}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+    name,
+    provider,
+    transport: "http",
+    url,
+    enabled: true,
+  };
+}
+
+function createCommandMcpServer(name: string, command: string, args: string[], env: Record<string, string> = {}): ExternalMcpServerSettings {
+  return {
+    id: `${name}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+    name,
+    provider: "custom",
+    transport: "stdio",
+    url: "",
+    command,
+    args,
+    env,
+    enabled: true,
+  };
+}
+
+function parseLines(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function parseKeyValueLines(value: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const line of value.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    const separator = trimmed.indexOf("=");
+    if (separator <= 0) {
+      continue;
+    }
+    const key = trimmed.slice(0, separator).trim();
+    if (!key) {
+      continue;
+    }
+    result[key] = trimmed.slice(separator + 1).trim();
+  }
+  return result;
+}
+
+function formatKeyValueLines(value: Record<string, string> | undefined): string {
+  return Object.entries(value ?? {})
+    .map(([key, itemValue]) => `${key}=${itemValue}`)
+    .join("\n");
 }
 
 class ModelPickerModal extends SuggestModal<string> {

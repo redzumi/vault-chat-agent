@@ -220,6 +220,7 @@ export class AIChatClient {
     const pendingEditsCanBeApplied = context.allowedCapabilities.includes("apply_edit");
     const searchScope = describeSearchScope(context.searchScope);
     const isPlanMode = intent === "edit" && context.runMode === "plan";
+    const externalTools = context.externalToolNames ?? [];
     const editPolicy =
       isPlanMode
         ? [
@@ -253,6 +254,9 @@ export class AIChatClient {
           ? "You can inspect the user's vault and propose reviewed file edits with tools before answering."
           : "You can inspect the user's vault with read-only tools before answering.",
       "Use tools when the answer needs more context than the current conversation.",
+      "When the user asks about an HTTP/HTTPS URL, use readUrl before answering unless the page content is already present in the conversation.",
+      "When the user asks about a YouTube URL or video transcript, use readYouTubeTranscript before answering. If transcript extraction fails, say that captions were unavailable or could not be fetched.",
+      externalTools.length > 0 ? `External MCP tools are available for this turn: ${externalTools.join(", ")}. Use them when they fit the user's request.` : "",
       searchScope ? `Current search scope: ${searchScope}. Keep searchNotes results within this scope unless the user explicitly asks to broaden it.` : "",
       "Cite file paths when using vault content.",
       "If the vault does not contain enough information, say so clearly.",

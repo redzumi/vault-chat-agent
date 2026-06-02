@@ -2,7 +2,7 @@ import { App, Editor, MarkdownFileInfo, MarkdownView, Notice, Plugin, SuggestMod
 import { ObsidianAgentTools } from "./agent/obsidianTools";
 import { SemanticChunker } from "./core/chunker";
 import { IndexStore } from "./core/indexStore";
-import { ChatIntent, ChatSearchScopeMode, DEFAULT_SETTINGS, ObsidianAIAssistantSettings, IndexCoverage, PersistedIndex, SavedPrompt } from "./core/types";
+import { ChatIntent, ChatSearchScopeMode, DEFAULT_SETTINGS, ExternalMcpServerSettings, ObsidianAIAssistantSettings, IndexCoverage, PersistedIndex, SavedPrompt } from "./core/types";
 import { indexVaultFiles, syncVaultIndex } from "./indexing/indexAll";
 import { isIndexableVaultFileLike } from "./indexing/indexableFiles";
 import { RealtimeIndexer } from "./indexing/realtimeIndexer";
@@ -12,6 +12,7 @@ import { AIChatClient } from "./services/aiChatClient";
 import { CHAT_VIEW_TYPE, ChatView } from "./ui/chatView";
 import { RELATED_NOTES_VIEW_TYPE, RelatedNotesView } from "./ui/relatedNotesView";
 import { ObsidianAIAssistantSettingTab } from "./ui/settingsTab";
+import { RemoteMcpManager } from "./mcp/remoteMcpClient";
 
 interface PluginData {
   settings?: Partial<ObsidianAIAssistantSettings> & {
@@ -34,6 +35,7 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
     this.graphSearchEngine,
     () => this.settings.topK,
   );
+  private readonly remoteMcpManager = new RemoteMcpManager(() => this.settings.externalMcpServers);
   private readonly aiChatClient = new AIChatClient(
     () => this.settings,
     () => this.indexStore.getVaultOverview(),
@@ -54,6 +56,8 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
           leaf,
           this.aiChatClient,
           this.agentTools,
+          this.remoteMcpManager,
+          () => this.settings.developerMode,
           this.settings.defaultIntent,
         ),
     );
@@ -216,6 +220,7 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
 
   onunload(): void {
     this.realtimeIndexer?.stop();
+    void this.remoteMcpManager.close();
     this.app.workspace.detachLeavesOfType(CHAT_VIEW_TYPE);
     this.app.workspace.detachLeavesOfType(RELATED_NOTES_VIEW_TYPE);
   }
@@ -307,6 +312,14 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
 
   getIndexCoverage(): IndexCoverage {
     return this.indexStore.getCoverage();
+  }
+
+  refreshChatViews(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(CHAT_VIEW_TYPE)) {
+      if (leaf.view instanceof ChatView) {
+        leaf.view.refreshDeveloperMode();
+      }
+    }
   }
 
   private rebuildChunker(): void {
@@ -566,9 +579,95 @@ function migrateSettings(settings: PluginData["settings"]): ObsidianAIAssistantS
     ...DEFAULT_SETTINGS,
     ...currentSettings,
     defaultIntent,
+    externalMcpServers: normalizeExternalMcpServers(currentSettings.externalMcpServers),
   };
 }
 
 function isChatIntent(value: unknown): value is ChatIntent {
   return value === "ask" || value === "edit";
+}
+
+function normalizeExternalMcpServers(value: unknown): ExternalMcpServerSettings[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item): ExternalMcpServerSettings[] => {
+    if (!isRecord(item) || typeof item.name !== "string") {
+      return [];
+    }
+    const name = item.name.trim() || "mcp-server";
+    const url = typeof item.url === "string" ? item.url.trim() : "";
+    const apiKey = typeof item.apiKey === "string" && item.apiKey.trim() ? item.apiKey.trim() : extractFirecrawlApiKey(url);
+    const provider = item.provider === "firecrawl" || isFirecrawlMcpUrl(url) || (name.toLowerCase() === "firecrawl" && Boolean(apiKey)) ? "firecrawl" : "custom";
+    const transport = provider === "firecrawl" ? "http" : item.transport === "stdio" ? "stdio" : "http";
+    const command = typeof item.command === "string" ? item.command.trim() : "";
+    if (provider === "custom" && transport === "http" && !url) {
+      return [];
+    }
+    if (provider === "custom" && transport === "stdio" && !command) {
+      return [];
+    }
+    return [
+      {
+        id: typeof item.id === "string" && item.id.trim() ? item.id.trim() : `${name}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+        name: provider === "firecrawl" ? "firecrawl" : name,
+        provider,
+        transport,
+        url: provider === "firecrawl" ? "" : url,
+        headers: normalizeStringRecord(item.headers),
+        command,
+        args: normalizeStringArray(item.args),
+        env: normalizeStringRecord(item.env),
+        apiKey,
+        enabled: typeof item.enabled === "boolean" ? item.enabled : true,
+      },
+    ];
+  });
+}
+
+function isFirecrawlMcpUrl(value: string): boolean {
+  try {
+    return new URL(value).hostname === "mcp.firecrawl.dev";
+  } catch {
+    return false;
+  }
+}
+
+function extractFirecrawlApiKey(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if (url.hostname !== "mcp.firecrawl.dev") {
+      return undefined;
+    }
+    const match = url.pathname.match(/^\/([^/]+)\/v2\/mcp\/?$/);
+    const apiKey = match?.[1] ? decodeURIComponent(match[1]) : "";
+    return apiKey && apiKey !== "YOUR_FIRECRAWL_API_KEY" ? apiKey : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeStringRecord(value: unknown): Record<string, string> {
+  if (!isRecord(value)) {
+    return {};
+  }
+  const result: Record<string, string> = {};
+  for (const [key, itemValue] of Object.entries(value)) {
+    const normalizedKey = key.trim();
+    if (normalizedKey && typeof itemValue === "string") {
+      result[normalizedKey] = itemValue;
+    }
+  }
+  return result;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => (typeof item === "string" && item.trim() ? [item.trim()] : []));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
