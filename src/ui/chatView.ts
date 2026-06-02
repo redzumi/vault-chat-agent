@@ -21,6 +21,13 @@ interface MentionSuggestion {
   searchText: string;
 }
 
+interface SlashCommand {
+  name: string;
+  detail: string;
+  acceptsPrompt: boolean;
+  searchText: string;
+}
+
 type PanelId = "edits" | "workingSet" | "sources" | "debug";
 
 export class ChatView extends ItemView {
@@ -33,6 +40,8 @@ export class ChatView extends ItemView {
   private draftMentions: ChatMention[] = [];
   private mentionSuggestions: MentionSuggestion[] = [];
   private selectedMentionIndex = 0;
+  private commandSuggestions: SlashCommand[] = [];
+  private selectedCommandIndex = 0;
   private workingSet: WorkingSetItem[] = [];
   private debugLogs: DebugLogEntry[] = [];
   private isSending = false;
@@ -137,6 +146,7 @@ export class ChatView extends ItemView {
       this.pendingEdits = [];
       this.draftMentions = [];
       this.mentionSuggestions = [];
+      this.commandSuggestions = [];
       this.workingSet = [];
       this.debugLogs = [];
       this.render();
@@ -255,11 +265,26 @@ export class ChatView extends ItemView {
       .filter(Boolean)
       .join(" ");
     const messageEl = parent.createDiv({ cls });
+    const contentEl = messageEl.createDiv({ cls: "vault-chat-agent-message-content" });
+    const copyButton = messageEl.createEl("button", {
+      cls: "vault-chat-agent-message-copy",
+      attr: { "aria-label": "Copy message text" },
+    });
+    setIcon(copyButton, "copy");
+    copyButton.onclick = () => {
+      void navigator.clipboard.writeText(message.content).then(
+        () => new Notice("Copied message.", 2000),
+        (error) => {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          new Notice(errorMessage, 5000);
+        },
+      );
+    };
 
     if (message.role === "assistant" && !message.error) {
-      await MarkdownRenderer.render(this.app, message.content, messageEl, "", this);
+      await MarkdownRenderer.render(this.app, message.content, contentEl, "", this);
     } else {
-      messageEl.setText(message.content);
+      contentEl.setText(message.content);
     }
   }
 
@@ -439,6 +464,7 @@ export class ChatView extends ItemView {
   private renderInput(): void {
     const mentionsEl = this.containerEl.createDiv({ cls: "vault-chat-agent-mentions" });
     this.renderDraftMentions(mentionsEl);
+    const commandSuggestionsEl = this.containerEl.createDiv({ cls: "vault-chat-agent-command-suggestions" });
     const suggestionsEl = this.containerEl.createDiv({ cls: "vault-chat-agent-mention-suggestions" });
 
     const inputRow = this.containerEl.createDiv({ cls: "vault-chat-agent-input-row" });
@@ -467,7 +493,16 @@ export class ChatView extends ItemView {
 
     const send = () => {
       const value = textarea.value.trim();
-      if (!value || this.isSending) {
+      if (!value) {
+        return;
+      }
+      if (this.isSending) {
+        if (value.toLocaleLowerCase() === "/stop") {
+          this.executeSlashCommand("/stop", "");
+        }
+        return;
+      }
+      if (this.handleSlashCommandInput(value)) {
         return;
       }
       void this.sendMessage(value);
@@ -478,6 +513,45 @@ export class ChatView extends ItemView {
       this.abortController?.abort();
     };
     textarea.onkeydown = (event) => {
+      if (this.commandSuggestions.length > 0) {
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          this.selectedCommandIndex = (this.selectedCommandIndex + 1) % this.commandSuggestions.length;
+          this.renderCommandSuggestions(commandSuggestionsEl, textarea, mentionsEl, suggestionsEl);
+          return;
+        }
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          this.selectedCommandIndex = (this.selectedCommandIndex - 1 + this.commandSuggestions.length) % this.commandSuggestions.length;
+          this.renderCommandSuggestions(commandSuggestionsEl, textarea, mentionsEl, suggestionsEl);
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          const selected = this.commandSuggestions[this.selectedCommandIndex];
+          if (selected && !selected.acceptsPrompt && getSlashCommandTrigger(textarea.value, textarea.selectionStart)?.query === selected.name.slice(1)) {
+            this.executeSlashCommand(selected.name, "");
+            return;
+          }
+          if (selected) {
+            this.insertSlashCommand(textarea, selected);
+            this.updateInputState(textarea, mentionsEl, suggestionsEl, commandSuggestionsEl);
+          }
+          return;
+        }
+        if (event.key === "Tab") {
+          event.preventDefault();
+          this.insertSlashCommand(textarea, this.commandSuggestions[this.selectedCommandIndex]);
+          this.updateInputState(textarea, mentionsEl, suggestionsEl, commandSuggestionsEl);
+          return;
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          this.commandSuggestions = [];
+          this.renderCommandSuggestions(commandSuggestionsEl, textarea, mentionsEl, suggestionsEl);
+          return;
+        }
+      }
       if (this.mentionSuggestions.length > 0) {
         if (event.key === "ArrowDown") {
           event.preventDefault();
@@ -494,13 +568,13 @@ export class ChatView extends ItemView {
         if (event.key === "Enter" || event.key === "Tab") {
           event.preventDefault();
           this.insertMentionSuggestion(textarea, this.mentionSuggestions[this.selectedMentionIndex]);
-          this.updateMentionState(textarea, mentionsEl, suggestionsEl);
+          this.updateInputState(textarea, mentionsEl, suggestionsEl, commandSuggestionsEl);
           return;
         }
         if (event.key === "Escape") {
           event.preventDefault();
           this.mentionSuggestions = [];
-          this.renderMentionSuggestions(suggestionsEl, textarea, mentionsEl);
+          this.renderMentionSuggestions(suggestionsEl, textarea, mentionsEl, commandSuggestionsEl);
           return;
         }
       }
@@ -510,12 +584,14 @@ export class ChatView extends ItemView {
       }
     };
     textarea.oninput = () => {
-      this.updateMentionState(textarea, mentionsEl, suggestionsEl);
+      this.updateInputState(textarea, mentionsEl, suggestionsEl, commandSuggestionsEl);
     };
     textarea.onblur = () => {
       window.setTimeout(() => {
         this.mentionSuggestions = [];
+        this.commandSuggestions = [];
         this.renderMentionSuggestions(suggestionsEl, textarea, mentionsEl);
+        this.renderCommandSuggestions(commandSuggestionsEl, textarea, mentionsEl, suggestionsEl);
       }, 120);
     };
   }
@@ -532,14 +608,23 @@ export class ChatView extends ItemView {
     }
   }
 
-  private updateMentionState(textarea: HTMLTextAreaElement, mentionsEl: HTMLElement, suggestionsEl: HTMLElement): void {
+  private updateInputState(textarea: HTMLTextAreaElement, mentionsEl: HTMLElement, suggestionsEl: HTMLElement, commandSuggestionsEl: HTMLElement): void {
     this.draftMentions = parseMentions(textarea.value, (path) => this.resolveMentionPath(path));
     this.renderDraftMentions(mentionsEl);
-    this.mentionSuggestions = this.getMentionSuggestions(textarea);
+    this.commandSuggestions = this.getSlashCommandSuggestions(textarea);
+    if (this.commandSuggestions.length > 0) {
+      this.mentionSuggestions = [];
+    } else {
+      this.mentionSuggestions = this.getMentionSuggestions(textarea);
+    }
     if (this.selectedMentionIndex >= this.mentionSuggestions.length) {
       this.selectedMentionIndex = 0;
     }
-    this.renderMentionSuggestions(suggestionsEl, textarea, mentionsEl);
+    if (this.selectedCommandIndex >= this.commandSuggestions.length) {
+      this.selectedCommandIndex = 0;
+    }
+    this.renderCommandSuggestions(commandSuggestionsEl, textarea, mentionsEl, suggestionsEl);
+    this.renderMentionSuggestions(suggestionsEl, textarea, mentionsEl, commandSuggestionsEl);
   }
 
   private getMentionSuggestions(textarea: HTMLTextAreaElement): MentionSuggestion[] {
@@ -554,7 +639,7 @@ export class ChatView extends ItemView {
       .slice(0, 8);
   }
 
-  private renderMentionSuggestions(parent: HTMLElement, textarea: HTMLTextAreaElement, mentionsEl?: HTMLElement): void {
+  private renderMentionSuggestions(parent: HTMLElement, textarea: HTMLTextAreaElement, mentionsEl?: HTMLElement, commandSuggestionsEl?: HTMLElement): void {
     parent.empty();
     if (this.mentionSuggestions.length === 0) {
       return;
@@ -569,7 +654,14 @@ export class ChatView extends ItemView {
       button.onmousedown = (event) => {
         event.preventDefault();
         this.insertMentionSuggestion(textarea, suggestion);
-        this.updateMentionState(textarea, mentionsEl ?? parent, parent);
+        if (commandSuggestionsEl) {
+          this.updateInputState(textarea, mentionsEl ?? parent, parent, commandSuggestionsEl);
+        } else {
+          this.draftMentions = parseMentions(textarea.value, (path) => this.resolveMentionPath(path));
+          this.renderDraftMentions(mentionsEl ?? parent);
+          this.mentionSuggestions = this.getMentionSuggestions(textarea);
+          this.renderMentionSuggestions(parent, textarea, mentionsEl);
+        }
       };
     });
   }
@@ -588,6 +680,122 @@ export class ChatView extends ItemView {
     const cursor = before.length + inserted.length;
     textarea.setSelectionRange(cursor, cursor);
     textarea.focus();
+  }
+
+  private getSlashCommandSuggestions(textarea: HTMLTextAreaElement): SlashCommand[] {
+    const trigger = getSlashCommandTrigger(textarea.value, textarea.selectionStart);
+    if (!trigger) {
+      return [];
+    }
+
+    const query = trigger.query.toLocaleLowerCase();
+    return buildSlashCommands(this.isSending)
+      .filter((command) => !query || command.searchText.includes(query))
+      .slice(0, 8);
+  }
+
+  private renderCommandSuggestions(parent: HTMLElement, textarea: HTMLTextAreaElement, mentionsEl: HTMLElement, suggestionsEl: HTMLElement): void {
+    parent.empty();
+    if (this.commandSuggestions.length === 0) {
+      return;
+    }
+
+    this.commandSuggestions.forEach((command, index) => {
+      const button = parent.createEl("button", {
+        cls: index === this.selectedCommandIndex ? "vault-chat-agent-command-suggestion is-selected" : "vault-chat-agent-command-suggestion",
+      });
+      button.createSpan({ cls: "vault-chat-agent-command-suggestion-name", text: command.name });
+      button.createSpan({ cls: "vault-chat-agent-command-suggestion-detail", text: command.detail });
+      button.onmousedown = (event) => {
+        event.preventDefault();
+        if (!command.acceptsPrompt && getSlashCommandTrigger(textarea.value, textarea.selectionStart)?.query === command.name.slice(1)) {
+          this.executeSlashCommand(command.name, "");
+          return;
+        }
+        this.insertSlashCommand(textarea, command);
+        this.updateInputState(textarea, mentionsEl, suggestionsEl, parent);
+      };
+    });
+  }
+
+  private insertSlashCommand(textarea: HTMLTextAreaElement, command: SlashCommand): void {
+    const trigger = getSlashCommandTrigger(textarea.value, textarea.selectionStart);
+    if (!trigger) {
+      return;
+    }
+
+    const before = textarea.value.slice(0, trigger.from);
+    const after = textarea.value.slice(trigger.to).replace(/^\s*/, "");
+    const inserted = `${command.name} `;
+    textarea.value = `${before}${inserted}${after}`;
+    const cursor = before.length + inserted.length;
+    textarea.setSelectionRange(cursor, cursor);
+    textarea.focus();
+  }
+
+  private handleSlashCommandInput(value: string): boolean {
+    const match = value.match(/^\/([a-z-]+)(?:\s+([\s\S]*))?$/i);
+    if (!match) {
+      return false;
+    }
+
+    const commandName = `/${match[1].toLocaleLowerCase()}`;
+    const prompt = match[2]?.trim() ?? "";
+    return this.executeSlashCommand(commandName, prompt);
+  }
+
+  private executeSlashCommand(commandName: string, prompt: string): boolean {
+    switch (commandName) {
+      case "/ask":
+        this.intent = "ask";
+        this.runMode = "direct";
+        break;
+      case "/edit":
+        this.intent = "edit";
+        this.runMode = "direct";
+        break;
+      case "/plan":
+        this.intent = "edit";
+        this.runMode = "plan";
+        break;
+      case "/direct":
+        this.runMode = "direct";
+        break;
+      case "/vault":
+        this.searchScopeMode = "vault";
+        break;
+      case "/note":
+        this.searchScopeMode = "current-note";
+        break;
+      case "/folder":
+        this.searchScopeMode = "current-folder";
+        break;
+      case "/clear":
+        this.messages = [];
+        this.lastSources = [];
+        this.pendingEdits = [];
+        this.draftMentions = [];
+        this.mentionSuggestions = [];
+        this.commandSuggestions = [];
+        this.workingSet = [];
+        this.debugLogs = [];
+        this.render();
+        return true;
+      case "/stop":
+        this.abortController?.abort();
+        this.render();
+        return true;
+      default:
+        return false;
+    }
+
+    if (prompt) {
+      void this.sendMessage(prompt);
+      return true;
+    }
+
+    this.render();
+    return true;
   }
 
   private async sendMessage(content: string): Promise<void> {
@@ -985,6 +1193,86 @@ function buildMentionSuggestions(app: App): MentionSuggestion[] {
     }));
 
   return [...current, ...files, ...folders];
+}
+
+function getSlashCommandTrigger(value: string, cursor: number): { from: number; to: number; query: string } | null {
+  const beforeCursor = value.slice(0, cursor);
+  const afterCursor = value.slice(cursor);
+  if (!beforeCursor.startsWith("/") || beforeCursor.includes("\n") || /\s/.test(beforeCursor)) {
+    return null;
+  }
+  if (afterCursor.length > 0 && !/^\s/.test(afterCursor)) {
+    return null;
+  }
+
+  return {
+    from: 0,
+    to: cursor,
+    query: beforeCursor.slice(1),
+  };
+}
+
+function buildSlashCommands(isSending: boolean): SlashCommand[] {
+  return [
+    {
+      name: "/ask",
+      detail: "Ask mode. Add text after it to send.",
+      acceptsPrompt: true,
+      searchText: "ask question read inspect",
+    },
+    {
+      name: "/edit",
+      detail: "Edit mode. Add text after it to request changes.",
+      acceptsPrompt: true,
+      searchText: "edit change patch propose",
+    },
+    {
+      name: "/plan",
+      detail: "Plan edit changes before preparing patches.",
+      acceptsPrompt: true,
+      searchText: "plan think review",
+    },
+    {
+      name: "/direct",
+      detail: "Turn off plan mode.",
+      acceptsPrompt: false,
+      searchText: "direct no plan",
+    },
+    {
+      name: "/vault",
+      detail: "Search the whole vault.",
+      acceptsPrompt: true,
+      searchText: "vault all workspace",
+    },
+    {
+      name: "/note",
+      detail: "Search only the active note.",
+      acceptsPrompt: true,
+      searchText: "note current active file",
+    },
+    {
+      name: "/folder",
+      detail: "Search the active note folder.",
+      acceptsPrompt: true,
+      searchText: "folder directory current",
+    },
+    {
+      name: "/clear",
+      detail: "Clear chat state.",
+      acceptsPrompt: false,
+      searchText: "clear reset delete trash",
+    },
+    ...(isSending
+      ? [
+          {
+            name: "/stop",
+            detail: "Stop the current response.",
+            acceptsPrompt: false,
+            searchText: "stop abort cancel",
+          },
+        ]
+      : []),
+  ];
 }
 
 function mergeWorkingSet(existing: WorkingSetItem[], ...groups: WorkingSetItem[][]): WorkingSetItem[] {
