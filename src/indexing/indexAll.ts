@@ -2,6 +2,7 @@ import { MetadataCache, Notice, TFile, Vault } from "obsidian";
 import { SemanticChunker } from "../core/chunker";
 import { IndexStore } from "../core/indexStore";
 import { IndexedDocument } from "../core/types";
+import { isIndexableVaultFileLike } from "./indexableFiles";
 
 const TEXT_EXTENSIONS = new Set(["md", "txt", "csv", "json"]);
 const CANVAS_EXTENSION = "canvas";
@@ -13,13 +14,18 @@ export interface VaultIndexResult {
   errorFiles: number;
 }
 
+export interface VaultSyncResult extends VaultIndexResult {
+  changedFiles: number;
+  deletedFiles: number;
+}
+
 export async function indexVaultFiles(
   vault: Vault,
   metadataCache: MetadataCache,
   chunker: SemanticChunker,
   indexStore: IndexStore,
 ): Promise<VaultIndexResult> {
-  const files = vault.getFiles();
+  const files = vault.getFiles().filter(isIndexableVaultFile);
   const notice = new Notice(`Vault Chat Agent: indexing 0/${files.length} files...`, 0);
   indexStore.clear();
 
@@ -30,6 +36,7 @@ export async function indexVaultFiles(
       const done = index + 1;
       if (done === files.length || done % 10 === 0) {
         notice.setMessage(`Vault Chat Agent: indexing ${done}/${files.length} files...`);
+        await yieldToMainThread();
       }
     }
 
@@ -48,6 +55,69 @@ export async function indexVaultFiles(
   }
 }
 
+export async function syncVaultIndex(
+  vault: Vault,
+  metadataCache: MetadataCache,
+  chunker: SemanticChunker,
+  indexStore: IndexStore,
+): Promise<VaultSyncResult> {
+  const files = vault.getFiles().filter(isIndexableVaultFile);
+  const filesByPath = new Map(files.map((file) => [file.path, file]));
+  const documentsByPath = new Map(indexStore.getAllDocuments().map((document) => [document.path, document]));
+  const changedFiles = files.filter((file) => {
+    const document = documentsByPath.get(file.path);
+    return !document || document.modified !== file.stat.mtime || document.size !== file.stat.size;
+  });
+  let deletedFiles = 0;
+
+  for (const document of indexStore.getAllDocuments()) {
+    if (!filesByPath.has(document.path)) {
+      indexStore.deleteFile(document.path);
+      deletedFiles += 1;
+    }
+  }
+
+  if (changedFiles.length === 0) {
+    const coverage = indexStore.getCoverage();
+    return {
+      totalFiles: coverage.totalFiles,
+      indexedFiles: coverage.indexedFiles,
+      metadataOnlyFiles: coverage.metadataOnlyFiles,
+      errorFiles: coverage.errorFiles,
+      changedFiles: 0,
+      deletedFiles,
+    };
+  }
+
+  const notice = new Notice(`Vault Chat Agent: syncing index 0/${changedFiles.length} changed files...`, 0);
+  try {
+    for (let index = 0; index < changedFiles.length; index += 1) {
+      await indexVaultFile(vault, metadataCache, chunker, indexStore, changedFiles[index]);
+
+      const done = index + 1;
+      if (done === changedFiles.length || done % 10 === 0) {
+        notice.setMessage(`Vault Chat Agent: syncing index ${done}/${changedFiles.length} changed files...`);
+        await yieldToMainThread();
+      }
+    }
+
+    const coverage = indexStore.getCoverage();
+    notice.setMessage(`Vault Chat Agent: synced ${changedFiles.length} changed files.`);
+    window.setTimeout(() => notice.hide(), 3000);
+    return {
+      totalFiles: coverage.totalFiles,
+      indexedFiles: coverage.indexedFiles,
+      metadataOnlyFiles: coverage.metadataOnlyFiles,
+      errorFiles: coverage.errorFiles,
+      changedFiles: changedFiles.length,
+      deletedFiles,
+    };
+  } catch (error) {
+    notice.hide();
+    throw error;
+  }
+}
+
 export async function indexVaultFile(
   vault: Vault,
   metadataCache: MetadataCache,
@@ -55,6 +125,11 @@ export async function indexVaultFile(
   indexStore: IndexStore,
   file: TFile,
 ): Promise<void> {
+  if (!isIndexableVaultFile(file)) {
+    indexStore.deleteFile(file.path);
+    return;
+  }
+
   try {
     const metadata = readMarkdownMetadata(metadataCache, file);
     const content = await readIndexableContent(vault, file);
@@ -82,6 +157,14 @@ export async function indexVaultFile(
   } catch (error) {
     indexStore.replaceMetadataOnly(createDocument(file, "error", [], [], [], [], [], 0, error instanceof Error ? error.message : String(error)));
   }
+}
+
+export function isIndexableVaultFile(file: TFile): boolean {
+  return isIndexableVaultFileLike(file);
+}
+
+function yieldToMainThread(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
 }
 
 async function readIndexableContent(vault: Vault, file: TFile): Promise<string | null> {

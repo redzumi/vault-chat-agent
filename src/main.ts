@@ -3,7 +3,8 @@ import { ObsidianAgentTools } from "./agent/obsidianTools";
 import { SemanticChunker } from "./core/chunker";
 import { IndexStore } from "./core/indexStore";
 import { ChatIntent, ChatSearchScopeMode, DEFAULT_SETTINGS, ObsidianAIAssistantSettings, IndexCoverage, PersistedIndex, SavedPrompt } from "./core/types";
-import { indexVaultFiles } from "./indexing/indexAll";
+import { indexVaultFiles, syncVaultIndex } from "./indexing/indexAll";
+import { isIndexableVaultFileLike } from "./indexing/indexableFiles";
 import { RealtimeIndexer } from "./indexing/realtimeIndexer";
 import { GraphSearchEngine } from "./search/graphSearch";
 import { HybridSearchEngine } from "./search/hybridSearch";
@@ -38,6 +39,8 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
     () => this.indexStore.getVaultOverview(),
   );
   private realtimeIndexer: RealtimeIndexer | null = null;
+  private indexingPromise: Promise<void> | null = null;
+  private layoutReady = false;
 
   async onload(): Promise<void> {
     await this.loadPluginData();
@@ -197,14 +200,18 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
     });
 
     this.addSettingTab(new ObsidianAIAssistantSettingTab(this.app, this));
-    this.configureRealtimeIndexer();
-
-    if (this.indexStore.getAllChunks().length === 0) {
-      void this.indexVault().catch((error) => {
-        console.error("Vault Chat Agent initial indexing failed", error);
-        new Notice("Vault Chat Agent: initial indexing failed. See console for details.", 6000);
-      });
-    }
+    this.app.workspace.onLayoutReady(() => {
+      this.layoutReady = true;
+      void this.activateView();
+      void this.syncIndex()
+        .catch((error) => {
+          console.error("Vault Chat Agent startup index sync failed", error);
+          new Notice("Vault Chat Agent: startup index sync failed. See console for details.", 6000);
+        })
+        .finally(() => {
+          this.configureRealtimeIndexer();
+        });
+    });
   }
 
   onunload(): void {
@@ -217,6 +224,9 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
     const data = (await this.loadData()) as PluginData | null;
     this.settings = migrateSettings(data?.settings);
     this.indexStore.load(data?.index);
+    if (this.pruneExcludedIndexEntries()) {
+      await this.savePluginData();
+    }
   }
 
   async savePluginData(): Promise<void> {
@@ -227,6 +237,33 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
   }
 
   async indexVault(): Promise<void> {
+    if (this.indexingPromise) {
+      new Notice("Vault Chat Agent: indexing is already running.", 3000);
+      return this.indexingPromise;
+    }
+
+    this.indexingPromise = this.indexVaultNow();
+    try {
+      await this.indexingPromise;
+    } finally {
+      this.indexingPromise = null;
+    }
+  }
+
+  async syncIndex(): Promise<void> {
+    if (this.indexingPromise) {
+      return this.indexingPromise;
+    }
+
+    this.indexingPromise = this.syncIndexNow();
+    try {
+      await this.indexingPromise;
+    } finally {
+      this.indexingPromise = null;
+    }
+  }
+
+  private async indexVaultNow(): Promise<void> {
     this.rebuildChunker();
     const indexed = await indexVaultFiles(this.app.vault, this.app.metadataCache, this.chunker, this.indexStore);
     this.searchEngine.setChunks(this.indexStore.getAllChunks());
@@ -234,11 +271,20 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
     new Notice(`Vault Chat Agent: indexed ${indexed.indexedFiles}/${indexed.totalFiles} files.`, 3000);
   }
 
+  private async syncIndexNow(): Promise<void> {
+    this.rebuildChunker();
+    const result = await syncVaultIndex(this.app.vault, this.app.metadataCache, this.chunker, this.indexStore);
+    this.searchEngine.setChunks(this.indexStore.getAllChunks());
+    if (result.changedFiles > 0 || result.deletedFiles > 0) {
+      await this.savePluginData();
+    }
+  }
+
   configureRealtimeIndexer(): void {
     this.realtimeIndexer?.stop();
     this.realtimeIndexer = null;
 
-    if (!this.settings.realtimeIndexing) {
+    if (!this.settings.realtimeIndexing || !this.layoutReady || this.indexingPromise) {
       return;
     }
 
@@ -265,6 +311,17 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
 
   private rebuildChunker(): void {
     this.chunker = new SemanticChunker(this.settings.chunkSize, this.settings.overlapSize);
+  }
+
+  private pruneExcludedIndexEntries(): boolean {
+    let changed = false;
+    for (const document of this.indexStore.getAllDocuments()) {
+      if (!isIndexableVaultFileLike({ path: document.path, stat: { size: document.size } })) {
+        this.indexStore.deleteFile(document.path);
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   private async activateView(): Promise<ChatView | null> {

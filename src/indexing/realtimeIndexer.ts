@@ -1,15 +1,19 @@
 import { EventRef, MetadataCache, TAbstractFile, TFile, TFolder, Vault } from "obsidian";
 import { SemanticChunker } from "../core/chunker";
 import { IndexStore } from "../core/indexStore";
-import { indexVaultFile } from "./indexAll";
+import { indexVaultFile, isIndexableVaultFile } from "./indexAll";
 import { scheduledPathMatchesTarget } from "./realtimeIndexerUtils";
 
 type PersistCallback = () => Promise<void>;
 type UpdateCallback = () => void;
 type EventRegistrar = (eventRef: EventRef) => void;
 
+const PERSIST_DELAY_MS = 2500;
+
 export class RealtimeIndexer {
   private timers = new Map<string, number>();
+  private persistTimer: number | null = null;
+  private stopped = false;
 
   constructor(
     private readonly vault: Vault,
@@ -22,6 +26,7 @@ export class RealtimeIndexer {
   ) {}
 
   start(): void {
+    this.stopped = false;
     this.registerEvent(
       this.vault.on("create", (file) => {
         if (file instanceof TFile) {
@@ -52,7 +57,7 @@ export class RealtimeIndexer {
           for (const child of collectFolderFiles(file)) {
             this.scheduleIndex(child);
           }
-          void this.persistAndNotify();
+          this.schedulePersistAndNotify();
           return;
         }
 
@@ -60,19 +65,35 @@ export class RealtimeIndexer {
         if (file instanceof TFile) {
           this.scheduleIndex(file);
         }
-        void this.persistAndNotify();
+        this.schedulePersistAndNotify();
       }),
     );
   }
 
   stop(): void {
+    this.stopped = true;
     for (const timerId of this.timers.values()) {
       window.clearTimeout(timerId);
     }
     this.timers.clear();
+    if (this.persistTimer !== null) {
+      window.clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
   }
 
   private scheduleIndex(file: TFile): void {
+    if (this.stopped) {
+      return;
+    }
+
+    if (!isIndexableVaultFile(file)) {
+      this.clearScheduledIndexes(file.path);
+      this.indexStore.deleteFile(file.path);
+      this.schedulePersistAndNotify();
+      return;
+    }
+
     const existing = this.timers.get(file.path);
     if (existing) {
       window.clearTimeout(existing);
@@ -86,27 +107,46 @@ export class RealtimeIndexer {
   }
 
   private async indexFile(file: TFile): Promise<void> {
+    if (this.stopped) {
+      return;
+    }
+
     await indexVaultFile(this.vault, this.metadataCache, this.chunker, this.indexStore, file);
-    await this.persistAndNotify();
+    this.schedulePersistAndNotify();
   }
 
   private handleDelete(file: TAbstractFile): void {
     this.clearScheduledIndexes(file.path);
     if (file instanceof TFolder) {
       this.indexStore.deleteFolder(file.path);
-      void this.persistAndNotify();
+      this.schedulePersistAndNotify();
       return;
     }
 
     if (file instanceof TFile) {
       this.indexStore.deleteFile(file.path);
-      void this.persistAndNotify();
+      this.schedulePersistAndNotify();
     }
   }
 
   private async persistAndNotify(): Promise<void> {
     await this.persist();
     this.onUpdate();
+  }
+
+  private schedulePersistAndNotify(): void {
+    if (this.stopped) {
+      return;
+    }
+
+    if (this.persistTimer !== null) {
+      window.clearTimeout(this.persistTimer);
+    }
+
+    this.persistTimer = window.setTimeout(() => {
+      this.persistTimer = null;
+      void this.persistAndNotify();
+    }, PERSIST_DELAY_MS);
   }
 
   private clearScheduledIndexes(path: string): void {
