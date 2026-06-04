@@ -1,9 +1,8 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { AgentToolExecution, ExternalMcpServerSettings, McpToolDefinition } from "../core/types";
 
-type McpClientTransport = StreamableHTTPClientTransport | StdioClientTransport;
+type McpClientTransport = StreamableHTTPClientTransport;
 
 interface RemoteMcpConnection {
   server: ExternalMcpServerSettings;
@@ -149,29 +148,10 @@ function getServerUrl(server: ExternalMcpServerSettings): string {
 }
 
 function hasConnectionTarget(server: ExternalMcpServerSettings): boolean {
-  if (server.provider === "firecrawl" || server.transport === "http") {
-    return Boolean(getServerUrl(server));
-  }
-  return Boolean(server.command?.trim());
+  return Boolean(getServerUrl(server));
 }
 
 function createTransport(server: ExternalMcpServerSettings): McpClientTransport {
-  if (server.transport === "stdio") {
-    const command = server.command?.trim();
-    if (!command) {
-      throw new Error("MCP command is not configured.");
-    }
-    return new StdioClientTransport({
-      command,
-      args: server.args?.filter((arg) => arg.trim()).map((arg) => arg.trim()) ?? [],
-      env: {
-        ...getDefaultEnvironment(),
-        ...sanitizeStringRecord(server.env),
-      },
-      stderr: "pipe",
-    });
-  }
-
   const serverUrl = getServerUrl(server);
   if (!serverUrl) {
     throw new Error("MCP server URL is not configured.");
@@ -191,9 +171,6 @@ function getConnectionSignature(server: ExternalMcpServerSettings): string {
     transport: server.transport,
     url: getServerUrl(server),
     headers: sanitizeStringRecord(server.headers),
-    command: server.command?.trim() ?? "",
-    args: server.args ?? [],
-    env: sanitizeStringRecord(server.env),
   });
 }
 
@@ -201,8 +178,6 @@ function cloneServerSettings(server: ExternalMcpServerSettings): ExternalMcpServ
   return {
     ...server,
     headers: sanitizeStringRecord(server.headers),
-    args: server.args?.slice(),
-    env: sanitizeStringRecord(server.env),
   };
 }
 

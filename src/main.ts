@@ -600,12 +600,7 @@ function normalizeExternalMcpServers(value: unknown): ExternalMcpServerSettings[
     const url = typeof item.url === "string" ? item.url.trim() : "";
     const apiKey = typeof item.apiKey === "string" && item.apiKey.trim() ? item.apiKey.trim() : extractFirecrawlApiKey(url);
     const provider = item.provider === "firecrawl" || isFirecrawlMcpUrl(url) || (name.toLowerCase() === "firecrawl" && Boolean(apiKey)) ? "firecrawl" : "custom";
-    const transport = provider === "firecrawl" ? "http" : item.transport === "stdio" ? "stdio" : "http";
-    const command = typeof item.command === "string" ? item.command.trim() : "";
-    if (provider === "custom" && transport === "http" && !url) {
-      return [];
-    }
-    if (provider === "custom" && transport === "stdio" && !command) {
+    if (provider === "custom" && !url) {
       return [];
     }
     return [
@@ -613,12 +608,9 @@ function normalizeExternalMcpServers(value: unknown): ExternalMcpServerSettings[
         id: typeof item.id === "string" && item.id.trim() ? item.id.trim() : `${name}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
         name: provider === "firecrawl" ? "firecrawl" : name,
         provider,
-        transport,
+        transport: "http",
         url: provider === "firecrawl" ? "" : url,
         headers: normalizeStringRecord(item.headers),
-        command,
-        args: normalizeStringArray(item.args),
-        env: normalizeStringRecord(item.env),
         apiKey,
         enabled: typeof item.enabled === "boolean" ? item.enabled : true,
       },
@@ -660,13 +652,6 @@ function normalizeStringRecord(value: unknown): Record<string, string> {
     }
   }
   return result;
-}
-
-function normalizeStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((item) => (typeof item === "string" && item.trim() ? [item.trim()] : []));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -212,7 +212,7 @@ export class ObsidianAIAssistantSettingTab extends PluginSettingTab {
     containerEl.createEl("h3", { text: "External MCP servers" });
     containerEl.createEl("p", {
       cls: "setting-item-description",
-      text: "External MCP servers exposed to the agent as read-only tools. Remote HTTPS and local command transports are supported.",
+      text: "External MCP servers exposed to the agent as read-only tools. Remote HTTPS Streamable HTTP endpoints are supported.",
     });
 
     new Setting(containerEl)
@@ -243,34 +243,6 @@ export class ObsidianAIAssistantSettingTab extends PluginSettingTab {
         }),
       );
 
-    new Setting(containerEl)
-      .setName("Add command MCP")
-      .setDesc("Adds a local stdio MCP server launched with npx -y.")
-      .addButton((button) =>
-        button.setButtonText("Add npx server").onClick(async () => {
-          this.plugin.settings.externalMcpServers = [
-            ...this.plugin.settings.externalMcpServers,
-            createCommandMcpServer("npx-mcp-server", "npx", ["-y", "package-name"]),
-          ];
-          await this.plugin.savePluginData();
-          this.display();
-        }),
-      );
-
-    new Setting(containerEl)
-      .setName("Add local Firecrawl MCP")
-      .setDesc("Adds firecrawl-mcp launched with npx -y. Add FIRECRAWL_API_KEY in env.")
-      .addButton((button) =>
-        button.setButtonText("Add local Firecrawl").onClick(async () => {
-          this.plugin.settings.externalMcpServers = [
-            ...this.plugin.settings.externalMcpServers,
-            createCommandMcpServer("firecrawl-local", "npx", ["-y", "firecrawl-mcp"], { FIRECRAWL_API_KEY: "" }),
-          ];
-          await this.plugin.savePluginData();
-          this.display();
-        }),
-      );
-
     for (const server of this.plugin.settings.externalMcpServers) {
       const isFirecrawl = server.provider === "firecrawl";
       new Setting(containerEl)
@@ -292,20 +264,6 @@ export class ObsidianAIAssistantSettingTab extends PluginSettingTab {
             });
           if (isFirecrawl) {
             text.setDisabled(true);
-          }
-        })
-        .addDropdown((dropdown) => {
-          dropdown
-            .addOption("http", "Remote URL")
-            .addOption("stdio", "Command")
-            .setValue(server.transport)
-            .onChange(async (value) => {
-              server.transport = value === "stdio" ? "stdio" : "http";
-              await this.plugin.savePluginData();
-              this.display();
-            });
-          if (isFirecrawl) {
-            dropdown.setDisabled(true);
           }
         })
         .addButton((button) =>
@@ -331,47 +289,6 @@ export class ObsidianAIAssistantSettingTab extends PluginSettingTab {
               .onChange(async (value) => {
                 server.apiKey = value.trim();
                 server.url = "";
-                await this.plugin.savePluginData();
-              });
-          });
-      } else if (server.transport === "stdio") {
-        new Setting(containerEl)
-          .setName("Command")
-          .setDesc("Executable used to launch the MCP server.")
-          .addText((text) =>
-            text
-              .setPlaceholder("npx")
-              .setValue(server.command ?? "")
-              .onChange(async (value) => {
-                server.command = value.trim();
-                await this.plugin.savePluginData();
-              }),
-          );
-
-        new Setting(containerEl)
-          .setName("Arguments")
-          .setDesc("One argument per line. Example: -y then firecrawl-mcp.")
-          .addTextArea((text) => {
-            text.inputEl.rows = 4;
-            text
-              .setPlaceholder("-y\npackage-name")
-              .setValue((server.args ?? []).join("\n"))
-              .onChange(async (value) => {
-                server.args = parseLines(value);
-                await this.plugin.savePluginData();
-              });
-          });
-
-        new Setting(containerEl)
-          .setName("Environment")
-          .setDesc("One KEY=value pair per line. Values are stored in Obsidian plugin data on this device.")
-          .addTextArea((text) => {
-            text.inputEl.rows = 4;
-            text
-              .setPlaceholder("API_KEY=...")
-              .setValue(formatKeyValueLines(server.env))
-              .onChange(async (value) => {
-                server.env = parseKeyValueLines(value);
                 await this.plugin.savePluginData();
               });
           });
@@ -530,27 +447,6 @@ function createExternalMcpServer(name: string, url: string, provider: ExternalMc
     url,
     enabled: true,
   };
-}
-
-function createCommandMcpServer(name: string, command: string, args: string[], env: Record<string, string> = {}): ExternalMcpServerSettings {
-  return {
-    id: `${name}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
-    name,
-    provider: "custom",
-    transport: "stdio",
-    url: "",
-    command,
-    args,
-    env,
-    enabled: true,
-  };
-}
-
-function parseLines(value: string): string[] {
-  return value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
 }
 
 function parseKeyValueLines(value: string): Record<string, string> {

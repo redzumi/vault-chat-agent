@@ -18,12 +18,9 @@ export interface ExternalMcpServerSettings {
   id: string;
   name: string;
   provider: "custom" | "firecrawl";
-  transport: "http" | "stdio";
+  transport: "http";
   url: string;
   headers?: Record<string, string>;
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
   apiKey?: string;
   enabled: boolean;
 }
