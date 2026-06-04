@@ -170,6 +170,90 @@ test("completeWithAgent includes authoritative runtime metadata in the system pr
   equal(systemPrompt.includes('"locale": "ru-RU"'), true);
 });
 
+test("completeWithAgent streams assistant content deltas when handlers are provided", async () => {
+  const requests = mockProviderStreamResponses([
+    [
+      streamChunk({ content: "Hello" }),
+      streamChunk({ content: " world" }),
+      "data: [DONE]\n\n",
+    ].join(""),
+  ]);
+  const client = createClient();
+  const deltas: string[] = [];
+  let resets = 0;
+
+  const result = await client.completeWithAgent("say hello", [], fakeMcpServer({}), "ask", undefined, undefined, undefined, {
+    onContentDelta: (delta) => deltas.push(delta),
+    onContentReset: () => {
+      resets += 1;
+    },
+  });
+
+  equal(result.answer, "Hello world");
+  deepEqual(deltas, ["Hello", " world"]);
+  equal(resets, 0);
+  equal((requests[0] as { stream?: unknown }).stream, true);
+});
+
+test("completeWithAgent reports streamed reasoning deltas without adding them to the answer", async () => {
+  mockProviderStreamResponses([
+    [
+      streamChunk({ reasoning_content: "Thinking" }),
+      streamChunk({ reasoning_content: "..." }),
+      streamChunk({ content: "Done." }),
+      "data: [DONE]\n\n",
+    ].join(""),
+  ]);
+  const client = createClient();
+  const reasoningDeltas: string[] = [];
+  const contentDeltas: string[] = [];
+
+  const result = await client.completeWithAgent("think then answer", [], fakeMcpServer({}), "ask", undefined, undefined, undefined, {
+    onContentDelta: (delta) => contentDeltas.push(delta),
+    onReasoningDelta: (delta) => reasoningDeltas.push(delta),
+    onContentReset: () => {},
+  });
+
+  equal(result.answer, "Done.");
+  deepEqual(reasoningDeltas, ["Thinking", "..."]);
+  deepEqual(contentDeltas, ["Done."]);
+});
+
+test("completeWithAgent handles streamed tool calls before streaming the final answer", async () => {
+  const requests = mockProviderStreamResponses([
+    [
+      streamChunk({ tool_calls: [{ index: 0, id: "call_list", function: { name: "listFolder", arguments: '{"pa' } }] }),
+      streamChunk({ tool_calls: [{ index: 0, function: { arguments: 'th":"/"}' } }] }),
+      "data: [DONE]\n\n",
+    ].join(""),
+    [streamChunk({ content: "A.md is in the vault." }), "data: [DONE]\n\n"].join(""),
+  ]);
+  const calls: string[] = [];
+  const client = createClient();
+  const deltas: string[] = [];
+
+  const result = await client.completeWithAgent(
+    "list files",
+    [],
+    fakeMcpServer({ listFolder: { content: "A.md" } }, calls),
+    "ask",
+    undefined,
+    undefined,
+    undefined,
+    {
+      onContentDelta: (delta) => deltas.push(delta),
+      onContentReset: () => deltas.push("[reset]"),
+    },
+  );
+
+  equal(result.answer, "A.md is in the vault.");
+  deepEqual(calls, ["listFolder"]);
+  deepEqual(deltas, ["A.md is in the vault."]);
+  equal(requests.length, 2);
+  equal((requests[0] as { stream?: unknown }).stream, true);
+  equal((requests[1] as { stream?: unknown }).stream, true);
+});
+
 test("completeWithAgent executes multiple tool calls from one assistant response", async () => {
   mockProviderResponses([
     assistantToolCalls([
@@ -270,6 +354,26 @@ function mockProviderResponses(responses: unknown[]): CapturedRequestBody[] {
     return new Response(JSON.stringify(response), { status: 200, headers: { "Content-Type": "application/json" } });
   }) as typeof fetch;
   return requests;
+}
+
+function mockProviderStreamResponses(responses: string[]): CapturedRequestBody[] {
+  const requests: CapturedRequestBody[] = [];
+  let index = 0;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    notEqual(init?.body, undefined);
+    requests.push(JSON.parse(String(init?.body)) as CapturedRequestBody);
+    const response = responses[index];
+    index += 1;
+    if (response === undefined) {
+      return new Response(JSON.stringify({ error: "No mocked response." }), { status: 500 });
+    }
+    return new Response(response, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  }) as typeof fetch;
+  return requests;
+}
+
+function streamChunk(delta: Record<string, unknown>): string {
+  return `data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`;
 }
 
 function assistantText(content: string): unknown {

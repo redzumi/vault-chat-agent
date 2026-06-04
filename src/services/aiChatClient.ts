@@ -4,6 +4,12 @@ import { ChatProviderAdapter, ProviderAssistantMessage, ProviderMessage } from "
 
 type DebugLogger = (entry: DebugLogEntry) => void;
 
+interface CompletionStreamHandlers {
+  onContentDelta: (delta: string) => void;
+  onReasoningDelta?: (delta: string) => void;
+  onContentReset: () => void;
+}
+
 export interface AgentRuntimeMetadata {
   currentDateIso: string;
   currentDate: string;
@@ -34,6 +40,7 @@ export class AIChatClient {
     logDebug?: DebugLogger,
     context: McpToolCallContext = { intent, pendingEdits: [], allowedCapabilities: ["read"] },
     signal?: AbortSignal,
+    streamHandlers?: CompletionStreamHandlers,
   ): Promise<AgentCompletion> {
     const messages: ProviderMessage[] = [
       { role: "system", content: this.buildAgentSystemPrompt(intent, context) },
@@ -57,7 +64,7 @@ export class AIChatClient {
 
     for (let step = 0; step < 30; step += 1) {
       throwIfAborted(signal);
-      const assistantMessage = await this.requestCompletion(messages, toolDefinitions, 8000, logDebug, step + 1, signal);
+      const assistantMessage = await this.requestCompletion(messages, toolDefinitions, 8000, logDebug, step + 1, signal, streamHandlers);
       const toolCalls = assistantMessage.toolCalls;
       const content = assistantMessage.content.trim();
 
@@ -131,7 +138,7 @@ export class AIChatClient {
           ? "Stop using tools and summarize the pending edits now."
           : "Stop using tools and provide the best final answer now. If you were creating a long note and have not finished it, say it was not completed.",
     });
-    const finalMessage = await this.requestCompletion(messages, toolDefinitions, 1800, logDebug, 31, signal);
+    const finalMessage = await this.requestCompletion(messages, toolDefinitions, 1800, logDebug, 31, signal, streamHandlers);
     const answer = this.cleanAssistantContent(finalMessage.content.trim());
     emitDebug(logDebug, "agent-final", "Agent stopped after step limit", {
       answer,
@@ -142,7 +149,15 @@ export class AIChatClient {
     return { answer, sources: Array.from(sources.values()), pendingEdits, workingSet: Array.from(workingSet.values()) };
   }
 
-  private async requestCompletion(messages: ProviderMessage[], toolDefinitions: McpToolDefinition[], maxTokens: number, logDebug?: DebugLogger, step?: number, signal?: AbortSignal): Promise<ProviderAssistantMessage> {
+  private async requestCompletion(
+    messages: ProviderMessage[],
+    toolDefinitions: McpToolDefinition[],
+    maxTokens: number,
+    logDebug?: DebugLogger,
+    step?: number,
+    signal?: AbortSignal,
+    streamHandlers?: CompletionStreamHandlers,
+  ): Promise<ProviderAssistantMessage> {
     const settings = this.getSettings();
     if (this.requiresApiKey(settings) && !settings.apiKey.trim()) {
       emitDebug(logDebug, "model-error", "Request blocked because the API key is not configured", {
@@ -161,7 +176,7 @@ export class AIChatClient {
     }
 
     const startedAt = Date.now();
-    const request = this.providerAdapter.createRequest(settings, messages, toolDefinitions, maxTokens);
+    const request = this.providerAdapter.createRequest(settings, messages, toolDefinitions, maxTokens, Boolean(streamHandlers));
     emitDebug(logDebug, "model-request", `Request ${step ?? "?"} to ${settings.model}`, {
       step,
       provider: this.providerAdapter.name,
@@ -195,6 +210,17 @@ export class AIChatClient {
         errorText,
       });
       throw new Error(`AI provider request failed (${response.status}): ${errorText}`);
+    }
+
+    if (streamHandlers && response.body) {
+      const message = await readStreamingCompletion(response, streamHandlers);
+      emitDebug(logDebug, "model-response", `Streaming response ${step ?? "?"} from ${settings.model}`, {
+        step,
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+        message: message.raw,
+      });
+      return message;
     }
 
     const data = await response.json();
@@ -322,6 +348,141 @@ export function createRuntimeMetadata(now = new Date()): AgentRuntimeMetadata {
     platform: getPlatform(),
     location: timeZone,
   };
+}
+
+async function readStreamingCompletion(response: Response, streamHandlers: CompletionStreamHandlers): Promise<ProviderAssistantMessage> {
+  if (!response.body) {
+    throw new Error("AI provider returned an empty streaming response.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const toolCallParts = new Map<number, { id?: string; name?: string; argumentsJson: string }>();
+  let buffer = "";
+  let content = "";
+  let reasoning = "";
+  let reasoningContent = "";
+  let reasoningDetails: unknown;
+  let hasToolCalls = false;
+  let emittedPreview = false;
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      const data = line.startsWith("data:") ? line.slice("data:".length).trim() : "";
+      if (!data || data === "[DONE]") {
+        continue;
+      }
+
+      const chunk = parseJsonRecord(data);
+      if (!chunk) {
+        continue;
+      }
+      const choices = chunk.choices;
+      if (!Array.isArray(choices) || !isRecord(choices[0])) {
+        continue;
+      }
+      const delta = choices[0].delta;
+      if (!isRecord(delta)) {
+        continue;
+      }
+
+      const contentDelta = typeof delta.content === "string" ? delta.content : "";
+      if (contentDelta) {
+        content += contentDelta;
+        if (!hasToolCalls) {
+          emittedPreview = true;
+          streamHandlers.onContentDelta(contentDelta);
+        }
+      }
+
+      if (typeof delta.reasoning === "string") {
+        reasoning += delta.reasoning;
+      }
+      if (typeof delta.reasoning_content === "string") {
+        reasoningContent += delta.reasoning_content;
+        streamHandlers.onReasoningDelta?.(delta.reasoning_content);
+      }
+      if (delta.reasoning_details !== undefined) {
+        reasoningDetails = delta.reasoning_details;
+      }
+
+      if (Array.isArray(delta.tool_calls)) {
+        if (!hasToolCalls && emittedPreview) {
+          streamHandlers.onContentReset();
+          emittedPreview = false;
+        }
+        hasToolCalls = true;
+        for (const toolCallDelta of delta.tool_calls) {
+          if (!isRecord(toolCallDelta)) {
+            continue;
+          }
+          const index = typeof toolCallDelta.index === "number" ? toolCallDelta.index : 0;
+          const existing = toolCallParts.get(index) ?? { argumentsJson: "" };
+          if (typeof toolCallDelta.id === "string") {
+            existing.id = toolCallDelta.id;
+          }
+          const fn = toolCallDelta.function;
+          if (isRecord(fn)) {
+            if (typeof fn.name === "string") {
+              existing.name = fn.name;
+            }
+            if (typeof fn.arguments === "string") {
+              existing.argumentsJson += fn.arguments;
+            }
+          }
+          toolCallParts.set(index, existing);
+        }
+      }
+    }
+
+    if (done) {
+      break;
+    }
+  }
+
+  const toolCalls = Array.from(toolCallParts.entries())
+    .sort(([left], [right]) => left - right)
+    .flatMap(([, toolCall]) => {
+      if (!toolCall.id || !toolCall.name) {
+        return [];
+      }
+      return [{ id: toolCall.id, name: toolCall.name, argumentsJson: toolCall.argumentsJson }];
+    });
+  const raw = {
+    role: "assistant",
+    content,
+    reasoning: reasoning || undefined,
+    reasoning_content: reasoningContent || undefined,
+    reasoning_details: reasoningDetails,
+    tool_calls: toolCalls.map((toolCall) => ({
+      id: toolCall.id,
+      type: "function",
+      function: { name: toolCall.name, arguments: toolCall.argumentsJson },
+    })),
+  };
+
+  return {
+    content,
+    reasoning: reasoning || undefined,
+    reasoningContent: reasoningContent || undefined,
+    reasoningDetails,
+    toolCalls,
+    raw,
+  };
+}
+
+function parseJsonRecord(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function getPrimaryLocale(): string {

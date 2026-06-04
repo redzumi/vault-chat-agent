@@ -47,6 +47,22 @@ test("fetchProviderModels calls /v1/models with auth and returns sorted unique i
   });
 });
 
+test("fetchProviderModels uses DeepSeek models endpoint without /v1", async () => {
+  const requests: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    requests.push({ input, init });
+    return new Response(JSON.stringify({ data: [{ id: "deepseek-v4-flash" }] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  const models = await fetchProviderModels({ apiBaseUrl: "https://api.deepseek.com/", apiKey: " test-key " });
+
+  deepEqual(models, ["deepseek-v4-flash"]);
+  equal(String(requests[0].input), "https://api.deepseek.com/models");
+});
+
 test("fetchProviderModels surfaces provider errors", async () => {
   globalThis.fetch = (async () => new Response("bad request", { status: 400 })) as typeof fetch;
 

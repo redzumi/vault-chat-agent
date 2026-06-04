@@ -1,3 +1,5 @@
+import { buildOpenAiCompatibleEndpointUrl } from "../providers/endpoints";
+
 export const PROVIDER_PRESETS = {
   custom: { name: "Custom OpenAI-compatible", apiBaseUrl: "", model: "" },
   openai: { name: "OpenAI", apiBaseUrl: "https://api.openai.com", model: "gpt-4o-mini" },
@@ -17,7 +19,7 @@ export async function fetchProviderModels(settings: { apiBaseUrl: string; apiKey
     headers.Authorization = `Bearer ${settings.apiKey.trim()}`;
   }
 
-  const response = await fetch(`${settings.apiBaseUrl.replace(/\/$/, "")}/v1/models`, {
+  const response = await fetch(buildOpenAiCompatibleEndpointUrl(settings.apiBaseUrl, "models"), {
     method: "GET",
     headers,
   });

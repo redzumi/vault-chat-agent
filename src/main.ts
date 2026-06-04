@@ -58,6 +58,7 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
           this.agentTools,
           this.remoteMcpManager,
           () => this.settings.developerMode,
+          () => this.settings.collapseThinkingByDefault,
           this.settings.defaultIntent,
         ),
     );

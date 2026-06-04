@@ -39,6 +39,7 @@ export interface ObsidianAIAssistantSettings {
   defaultIntent: ChatIntent;
   systemPrompt: string;
   stripReasoningBlocks: boolean;
+  collapseThinkingByDefault: boolean;
   developerMode: boolean;
   externalMcpServers: ExternalMcpServerSettings[];
   savedPrompts: SavedPrompt[];
@@ -176,6 +177,7 @@ export const DEFAULT_SETTINGS: ObsidianAIAssistantSettings = {
   realtimeIndexing: true,
   defaultIntent: "ask",
   stripReasoningBlocks: true,
+  collapseThinkingByDefault: false,
   developerMode: false,
   savedPrompts: [],
   systemPrompt: "Assume the user is not a developer. Explain technical details in plain language, avoid unnecessary implementation jargon, and ask before expecting them to make code-level decisions.",

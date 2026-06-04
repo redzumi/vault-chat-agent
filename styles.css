@@ -90,6 +90,40 @@
   -webkit-user-select: text;
 }
 
+.vault-chat-agent-message-reasoning {
+  border-bottom: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.45;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+}
+
+.vault-chat-agent-message-reasoning summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: 4px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.vault-chat-agent-message-reasoning:not([open]) {
+  margin-bottom: 6px;
+}
+
+.vault-chat-agent-message-reasoning:not([open]) summary {
+  margin-bottom: 0;
+}
+
+.vault-chat-agent-message-reasoning-content {
+  opacity: 0.9;
+  white-space: pre-wrap;
+}
+
+.vault-chat-agent-message-answer-stream {
+  white-space: pre-wrap;
+}
+
 .vault-chat-agent-message-copy {
   align-items: center;
   background: transparent;

@@ -32,6 +32,6 @@ export interface ProviderRequest {
 
 export interface ChatProviderAdapter {
   name: string;
-  createRequest(settings: ObsidianAIAssistantSettings, messages: ProviderMessage[], tools: McpToolDefinition[], maxTokens: number): ProviderRequest;
+  createRequest(settings: ObsidianAIAssistantSettings, messages: ProviderMessage[], tools: McpToolDefinition[], maxTokens: number, stream?: boolean): ProviderRequest;
   parseResponse(data: unknown): ProviderAssistantMessage | null;
 }

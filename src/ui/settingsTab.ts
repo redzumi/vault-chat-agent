@@ -188,6 +188,17 @@ export class ObsidianAIAssistantSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Collapse streamed thinking")
+      .setDesc("Start streamed thinking output collapsed in chat messages.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.collapseThinkingByDefault).onChange(async (value) => {
+          this.plugin.settings.collapseThinkingByDefault = value;
+          await this.plugin.savePluginData();
+          this.plugin.refreshChatViews();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName("Realtime indexing")
       .setDesc("Update the local index when vault files change.")
       .addToggle((toggle) =>

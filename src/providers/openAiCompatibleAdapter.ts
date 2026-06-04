@@ -1,18 +1,19 @@
 import { McpToolDefinition, ObsidianAIAssistantSettings } from "../core/types";
+import { buildOpenAiCompatibleEndpointUrl } from "./endpoints";
 import { ChatProviderAdapter, ProviderAssistantMessage, ProviderMessage, ProviderRequest } from "./types";
 
 export class OpenAiCompatibleAdapter implements ChatProviderAdapter {
   readonly name = "openai-compatible";
 
-  createRequest(settings: ObsidianAIAssistantSettings, messages: ProviderMessage[], tools: McpToolDefinition[], maxTokens: number): ProviderRequest {
-    const url = `${settings.apiBaseUrl.replace(/\/$/, "")}/v1/chat/completions`;
+  createRequest(settings: ObsidianAIAssistantSettings, messages: ProviderMessage[], tools: McpToolDefinition[], maxTokens: number, stream = false): ProviderRequest {
+    const url = buildOpenAiCompatibleEndpointUrl(settings.apiBaseUrl, "chat/completions");
     const body: Record<string, unknown> = {
       model: settings.model,
       messages: messages.map(toOpenAiMessage),
       tools: tools.map(toOpenAiTool),
       temperature: 0.2,
       max_tokens: maxTokens,
-      stream: false,
+      stream,
     };
     if (supportsToolChoice(settings.apiBaseUrl)) {
       body.tool_choice = "auto";

@@ -41,6 +41,22 @@ test("createRequest builds the baseline OpenAI-compatible chat completions paylo
   });
 });
 
+test("createRequest uses DeepSeek chat completions endpoint without /v1", () => {
+  const adapter = new OpenAiCompatibleAdapter();
+  const request = adapter.createRequest(settings({ apiBaseUrl: "https://api.deepseek.com/", model: "deepseek-v4-flash" }), [{ role: "user", content: "hello" }], [tool], 100, true);
+
+  equal(request.url, "https://api.deepseek.com/chat/completions");
+  equal((request.body as Record<string, unknown>).stream, true);
+  equal(Object.prototype.hasOwnProperty.call(request.body, "thinking"), false);
+});
+
+test("createRequest does not duplicate an explicit versioned base URL", () => {
+  const adapter = new OpenAiCompatibleAdapter();
+  const request = adapter.createRequest(settings({ apiBaseUrl: "https://api.openai.com/v1" }), [{ role: "user", content: "hello" }], [tool], 100);
+
+  equal(request.url, "https://api.openai.com/v1/chat/completions");
+});
+
 test("createRequest keeps tool_choice for remote OpenAI-compatible providers", () => {
   const adapter = new OpenAiCompatibleAdapter();
   const providers = ["https://api.deepseek.com", "https://openrouter.ai/api", "http://localhost:1234"];

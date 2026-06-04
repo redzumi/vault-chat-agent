@@ -10,6 +10,8 @@ export const CHAT_VIEW_TYPE = "vault-chat-agent-chat-view";
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  reasoningContent?: string;
+  streaming?: boolean;
   error?: boolean;
 }
 
@@ -46,6 +48,7 @@ export class ChatView extends ItemView {
   private debugLogs: DebugLogEntry[] = [];
   private isSending = false;
   private abortController: AbortController | null = null;
+  private streamingRenderTimer: number | null = null;
   private allowApplyToolsForNextMessage = false;
   private statusText = "";
   private readonly expandedPanels: Record<PanelId, boolean> = {
@@ -61,6 +64,7 @@ export class ChatView extends ItemView {
     private readonly agentTools: AgentToolExecutor,
     private readonly remoteMcpManager: RemoteMcpManager,
     private readonly getDeveloperMode: () => boolean,
+    private readonly getCollapseThinkingByDefault: () => boolean,
     defaultIntent: ChatIntent,
   ) {
     super(leaf);
@@ -272,7 +276,7 @@ export class ChatView extends ItemView {
     });
     setIcon(copyButton, "copy");
     copyButton.onclick = () => {
-      void navigator.clipboard.writeText(message.content).then(
+      void navigator.clipboard.writeText(formatMessageForCopy(message)).then(
         () => new Notice("Copied message.", 2000),
         (error) => {
           const errorMessage = error instanceof Error ? error.message : String(error);
@@ -281,8 +285,21 @@ export class ChatView extends ItemView {
       );
     };
 
-    if (message.role === "assistant" && !message.error) {
-      await MarkdownRenderer.render(this.app, message.content, contentEl, "", this);
+    if (message.reasoningContent && message.role === "assistant" && !message.error) {
+      const reasoningEl = contentEl.createEl("details", { cls: "vault-chat-agent-message-reasoning" });
+      reasoningEl.open = !this.getCollapseThinkingByDefault();
+      reasoningEl.createEl("summary", { text: "Thinking" });
+      reasoningEl.createDiv({ cls: "vault-chat-agent-message-reasoning-content", text: message.reasoningContent });
+    }
+
+    if (message.role === "assistant" && !message.error && message.streaming) {
+      if (message.content) {
+        contentEl.createDiv({ cls: "vault-chat-agent-message-answer-stream", text: message.content });
+      }
+    } else if (message.role === "assistant" && !message.error) {
+      if (message.content) {
+        await MarkdownRenderer.render(this.app, message.content, contentEl, "", this);
+      }
     } else {
       contentEl.setText(message.content);
     }
@@ -811,6 +828,22 @@ export class ChatView extends ItemView {
     this.abortController = new AbortController();
     const allowApplyTools = this.allowApplyToolsForNextMessage;
     this.allowApplyToolsForNextMessage = false;
+    let streamingMessage: ChatMessage | null = null;
+    const ensureStreamingMessage = (): ChatMessage => {
+      if (!streamingMessage) {
+        streamingMessage = { role: "assistant", content: "", streaming: true };
+        this.messages.push(streamingMessage);
+      }
+      return streamingMessage;
+    };
+    const removeStreamingMessage = (): void => {
+      if (!streamingMessage) {
+        return;
+      }
+      this.messages = this.messages.filter((message) => message !== streamingMessage);
+      streamingMessage = null;
+      this.scheduleStreamingRender();
+    };
     this.render();
 
     try {
@@ -846,6 +879,20 @@ export class ChatView extends ItemView {
           externalToolNames: this.remoteMcpManager.getToolNames(),
         },
         this.abortController.signal,
+        {
+          onContentDelta: (delta) => {
+            this.statusText = "Writing...";
+            ensureStreamingMessage().content += delta;
+            this.scheduleStreamingRender();
+          },
+          onReasoningDelta: (delta) => {
+            const message = ensureStreamingMessage();
+            message.reasoningContent = `${message.reasoningContent ?? ""}${delta}`;
+            this.statusText = "Thinking...";
+            this.scheduleStreamingRender();
+          },
+          onContentReset: removeStreamingMessage,
+        },
       );
       this.lastSources = result.sources;
       this.pendingEdits = this.pendingEdits.concat(result.pendingEdits);
@@ -854,9 +901,16 @@ export class ChatView extends ItemView {
         result.workingSet,
         result.pendingEdits.map((edit) => ({ path: edit.path, role: "edited", detail: edit.summary })),
       );
-      this.messages.push({ role: "assistant", content: result.answer });
+      if (streamingMessage !== null) {
+        const message = streamingMessage as ChatMessage;
+        message.content = result.answer;
+        message.streaming = false;
+      } else {
+        this.messages.push({ role: "assistant", content: result.answer });
+      }
     } catch (error) {
       if (isAbortError(error)) {
+        removeStreamingMessage();
         this.messages.push({ role: "assistant", content: "Stopped." });
         return;
       }
@@ -867,8 +921,22 @@ export class ChatView extends ItemView {
       this.isSending = false;
       this.abortController = null;
       this.statusText = "";
+      if (this.streamingRenderTimer !== null) {
+        window.clearTimeout(this.streamingRenderTimer);
+        this.streamingRenderTimer = null;
+      }
       this.render();
     }
+  }
+
+  private scheduleStreamingRender(): void {
+    if (this.streamingRenderTimer !== null) {
+      return;
+    }
+    this.streamingRenderTimer = window.setTimeout(() => {
+      this.streamingRenderTimer = null;
+      this.render();
+    }, 80);
   }
 
   private createMcpServer(): ObsidianMcpServer {
@@ -1306,6 +1374,13 @@ function editKindLabel(edit: PendingEdit): string {
     return "New note";
   }
   return edit.kind === "patch" ? "Patch" : "Full edit";
+}
+
+function formatMessageForCopy(message: ChatMessage): string {
+  if (!message.reasoningContent) {
+    return message.content;
+  }
+  return message.content ? `${message.reasoningContent}\n\n${message.content}` : message.reasoningContent;
 }
 
 function buildLineDiff(oldContent: string, newContent: string): DiffLine[] {
