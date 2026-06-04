@@ -662,12 +662,13 @@ export class ChatView extends ItemView {
       return;
     }
 
+    const query = getMentionTrigger(textarea.value, textarea.selectionStart)?.query ?? "";
     this.mentionSuggestions.forEach((suggestion, index) => {
       const button = parent.createEl("button", {
         cls: index === this.selectedMentionIndex ? "vault-chat-agent-mention-suggestion is-selected" : "vault-chat-agent-mention-suggestion",
       });
-      button.createSpan({ cls: "vault-chat-agent-mention-suggestion-label", text: suggestion.label });
-      button.createSpan({ cls: "vault-chat-agent-mention-suggestion-detail", text: suggestion.detail });
+      renderHighlightedSuggestionText(button.createSpan({ cls: "vault-chat-agent-mention-suggestion-label" }), suggestion.label, query);
+      renderHighlightedSuggestionText(button.createSpan({ cls: "vault-chat-agent-mention-suggestion-detail" }), suggestion.detail, query);
       button.onmousedown = (event) => {
         event.preventDefault();
         this.insertMentionSuggestion(textarea, suggestion);
@@ -1261,6 +1262,38 @@ function buildMentionSuggestions(app: App): MentionSuggestion[] {
     }));
 
   return [...current, ...files, ...folders];
+}
+
+function renderHighlightedSuggestionText(parent: HTMLElement, text: string, query: string): void {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  if (!normalizedQuery) {
+    parent.setText(text);
+    return;
+  }
+
+  const normalizedText = text.toLocaleLowerCase();
+  let cursor = 0;
+  let matchIndex = normalizedText.indexOf(normalizedQuery);
+  if (matchIndex === -1) {
+    parent.setText(text);
+    return;
+  }
+
+  while (matchIndex !== -1) {
+    if (matchIndex > cursor) {
+      parent.appendText(text.slice(cursor, matchIndex));
+    }
+    parent.createSpan({
+      cls: "vault-chat-agent-mention-suggestion-highlight",
+      text: text.slice(matchIndex, matchIndex + normalizedQuery.length),
+    });
+    cursor = matchIndex + normalizedQuery.length;
+    matchIndex = normalizedText.indexOf(normalizedQuery, cursor);
+  }
+
+  if (cursor < text.length) {
+    parent.appendText(text.slice(cursor));
+  }
 }
 
 function getSlashCommandTrigger(value: string, cursor: number): { from: number; to: number; query: string } | null {

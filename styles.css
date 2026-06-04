@@ -300,6 +300,12 @@
   font-size: var(--font-ui-smaller);
 }
 
+.vault-chat-agent-mention-suggestion-highlight {
+  background: var(--text-highlight-bg);
+  border-radius: 2px;
+  color: var(--text-normal);
+}
+
 .vault-chat-agent-input {
   flex: 1;
   min-height: 64px;
