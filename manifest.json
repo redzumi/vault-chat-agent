@@ -1,7 +1,7 @@
 {
   "id": "vault-chat-agent",
   "name": "Vault Chat Agent",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "minAppVersion": "1.5.0",
   "description": "Chat with an AI assistant that can search your vault, inspect notes, and prepare edits for review.",
   "author": "Evgenii Bykovskikh",
