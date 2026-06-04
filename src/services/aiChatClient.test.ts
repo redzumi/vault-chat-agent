@@ -1,7 +1,7 @@
 import { afterEach, test } from "node:test";
 import { deepEqual, equal, notEqual } from "node:assert/strict";
 import { AgentToolExecution, ChatIntent, DEFAULT_SETTINGS, McpToolCallContext, McpToolDefinition, McpToolServer, ObsidianAIAssistantSettings } from "../core/types";
-import { AIChatClient } from "./aiChatClient";
+import { AgentRuntimeMetadata, AIChatClient } from "./aiChatClient";
 
 const originalFetch = globalThis.fetch;
 
@@ -144,6 +144,32 @@ test("completeWithAgent in plan mode exposes only read tools and asks for a plan
   equal(systemPrompt.includes("propose reviewed file edits"), false);
 });
 
+test("completeWithAgent includes authoritative runtime metadata in the system prompt", async () => {
+  const metadata: AgentRuntimeMetadata = {
+    currentDateIso: "2026-06-04",
+    currentDate: "Thursday, June 4, 2026",
+    currentTime: "12:34:56 PM GMT+3",
+    isoTimestamp: "2026-06-04T09:34:56.000Z",
+    timeZone: "Europe/Moscow",
+    utcOffset: "UTC+03:00",
+    locale: "ru-RU",
+    languages: ["ru-RU", "en-US"],
+    platform: "MacIntel",
+    location: "Europe/Moscow",
+  };
+  const requests = mockProviderResponses([assistantText("Today is June 4, 2026.")]);
+  const client = createClient({}, metadata);
+
+  await client.completeWithAgent("какой сегодня год", [], fakeMcpServer({}), "ask");
+
+  const systemPrompt = String(requests[0].messages[0].content);
+  equal(systemPrompt.includes("Runtime metadata is authoritative"), true);
+  equal(systemPrompt.includes('"currentDateIso": "2026-06-04"'), true);
+  equal(systemPrompt.includes('"currentDate": "Thursday, June 4, 2026"'), true);
+  equal(systemPrompt.includes('"timeZone": "Europe/Moscow"'), true);
+  equal(systemPrompt.includes('"locale": "ru-RU"'), true);
+});
+
 test("completeWithAgent executes multiple tool calls from one assistant response", async () => {
   mockProviderResponses([
     assistantToolCalls([
@@ -178,7 +204,7 @@ test("completeWithAgent executes multiple tool calls from one assistant response
   ]);
 });
 
-function createClient(settings: Partial<ObsidianAIAssistantSettings> = {}): AIChatClient {
+function createClient(settings: Partial<ObsidianAIAssistantSettings> = {}, metadata?: AgentRuntimeMetadata): AIChatClient {
   return new AIChatClient(
     () => ({
       ...DEFAULT_SETTINGS,
@@ -188,6 +214,7 @@ function createClient(settings: Partial<ObsidianAIAssistantSettings> = {}): AICh
       ...settings,
     }),
     () => "2 markdown files indexed.",
+    metadata ? () => metadata : undefined,
   );
 }
 

@@ -4,12 +4,26 @@ import { ChatProviderAdapter, ProviderAssistantMessage, ProviderMessage } from "
 
 type DebugLogger = (entry: DebugLogEntry) => void;
 
+export interface AgentRuntimeMetadata {
+  currentDateIso: string;
+  currentDate: string;
+  currentTime: string;
+  isoTimestamp: string;
+  timeZone: string;
+  utcOffset: string;
+  locale: string;
+  languages: string[];
+  platform: string;
+  location: string;
+}
+
 export class AIChatClient {
   private readonly providerAdapter: ChatProviderAdapter = new OpenAiCompatibleAdapter();
 
   constructor(
     private readonly getSettings: () => ObsidianAIAssistantSettings,
     private readonly getVaultOverview: () => string,
+    private readonly getRuntimeMetadata: () => AgentRuntimeMetadata = createRuntimeMetadata,
   ) {}
 
   async completeWithAgent(
@@ -216,6 +230,7 @@ export class AIChatClient {
 
   private buildAgentSystemPrompt(intent: ChatIntent, context: McpToolCallContext): string {
     const customSystemPrompt = this.getSettings().systemPrompt.trim();
+    const runtimeMetadata = this.getRuntimeMetadata();
     const pendingEdits = context.pendingEdits;
     const pendingEditsCanBeApplied = context.allowedCapabilities.includes("apply_edit");
     const searchScope = describeSearchScope(context.searchScope);
@@ -248,6 +263,9 @@ export class AIChatClient {
 
     return [
       "You are an AI agent inside Obsidian.",
+      "Runtime metadata is authoritative for the user's current date, time, locale, language, platform, and location context. Do not rely on model training-time dates when answering current-date or time-sensitive requests.",
+      "Runtime metadata:",
+      JSON.stringify(runtimeMetadata, null, 2),
       isPlanMode
         ? "You can inspect the user's vault with read-only tools before returning a plan."
         : intent === "edit"
@@ -286,6 +304,82 @@ export class AIChatClient {
     }
     return stripReasoningBlocks(content).trim();
   }
+}
+
+export function createRuntimeMetadata(now = new Date()): AgentRuntimeMetadata {
+  const locale = getPrimaryLocale();
+  const timeZone = getTimeZone();
+  const languages = getLanguages(locale);
+  return {
+    currentDateIso: formatDateIso(now, timeZone),
+    currentDate: formatDate(now, locale, timeZone),
+    currentTime: formatTime(now, locale, timeZone),
+    isoTimestamp: now.toISOString(),
+    timeZone,
+    utcOffset: formatUtcOffset(now, timeZone),
+    locale,
+    languages,
+    platform: getPlatform(),
+    location: timeZone,
+  };
+}
+
+function getPrimaryLocale(): string {
+  const navigatorLike = getNavigatorLike();
+  return navigatorLike?.language || Intl.DateTimeFormat().resolvedOptions().locale || "en-US";
+}
+
+function getLanguages(locale: string): string[] {
+  const languages = getNavigatorLike()?.languages?.filter(Boolean);
+  return languages && languages.length > 0 ? Array.from(new Set(languages)) : [locale];
+}
+
+function getTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+function getPlatform(): string {
+  return getNavigatorLike()?.platform || "unknown";
+}
+
+function getNavigatorLike(): { language?: string; languages?: readonly string[]; platform?: string } | undefined {
+  return typeof globalThis.navigator === "object" ? globalThis.navigator : undefined;
+}
+
+function formatDate(date: Date, locale: string, timeZone: string): string {
+  return new Intl.DateTimeFormat(locale, {
+    dateStyle: "full",
+    timeZone,
+  }).format(date);
+}
+
+function formatTime(date: Date, locale: string, timeZone: string): string {
+  return new Intl.DateTimeFormat(locale, {
+    timeStyle: "long",
+    timeZone,
+  }).format(date);
+}
+
+function formatDateIso(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone,
+    year: "numeric",
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === "year")?.value ?? "0000";
+  const month = parts.find((part) => part.type === "month")?.value ?? "01";
+  const day = parts.find((part) => part.type === "day")?.value ?? "01";
+  return `${year}-${month}-${day}`;
+}
+
+function formatUtcOffset(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    timeZoneName: "longOffset",
+  }).formatToParts(date);
+  const offset = parts.find((part) => part.type === "timeZoneName")?.value.replace("GMT", "UTC");
+  return offset || "UTC";
 }
 
 function stripReasoningBlocks(content: string): string {
