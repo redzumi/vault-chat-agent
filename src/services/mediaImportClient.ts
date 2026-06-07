@@ -9,6 +9,20 @@ export interface MarkitdownConvertResult {
 export class MediaImportClient {
   constructor(private readonly getSettings: () => ObsidianAIAssistantSettings) {}
 
+  async checkHealth(): Promise<void> {
+    const settings = this.getSettings();
+    const response = await requestUrl({
+      url: buildHealthUrl(settings.markitdownApiBaseUrl),
+      method: "GET",
+      headers: buildHeaders(settings),
+      throw: false,
+    });
+
+    if (response.status >= 400) {
+      throw new Error(formatHttpError(response.status, response.text));
+    }
+  }
+
   async convertFile(file: File, onBodyReady?: () => void): Promise<MarkitdownConvertResult> {
     const settings = this.getSettings();
     const boundary = `----VaultChatAgentFormBoundary${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
@@ -27,7 +41,6 @@ export class MediaImportClient {
     if (response.status >= 400) {
       throw new Error(formatHttpError(response.status, response.text));
     }
-
     const payload = parseJsonResponse(response.text);
     if (!isRecord(payload) || typeof payload.markdown !== "string") {
       throw new Error("MarkItDown response did not include markdown.");
@@ -64,6 +77,11 @@ async function buildMultipartBody(boundary: string, file: File): Promise<ArrayBu
 function buildConvertUrl(baseUrl: string): string {
   const normalizedBaseUrl = baseUrl.trim() || "https://markitdown.redz.sbs";
   return `${normalizedBaseUrl.replace(/\/+$/, "")}/convert`;
+}
+
+function buildHealthUrl(baseUrl: string): string {
+  const normalizedBaseUrl = baseUrl.trim() || "https://markitdown.redz.sbs";
+  return `${normalizedBaseUrl.replace(/\/+$/, "")}/health`;
 }
 
 function buildHeaders(settings: ObsidianAIAssistantSettings): Record<string, string> {

@@ -4,9 +4,13 @@ import { MediaImportClient } from "./mediaImportClient";
 
 type MediaImportListener = () => void;
 
+const LARGE_FILE_WARNING_BYTES = 50 * 1024 * 1024;
+const KNOWN_IMPORT_EXTENSIONS = new Set(["pdf", "docx", "pptx", "xlsx", "xls", "html", "htm", "txt", "csv", "json", "xml", "jpg", "jpeg", "png", "gif", "webp", "mp3", "wav"]);
+
 export class MediaImportQueue {
   private readonly items: MediaImportItem[] = [];
   private readonly listeners = new Set<MediaImportListener>();
+  private readonly canceledIds = new Set<string>();
   private running = 0;
 
   constructor(
@@ -36,6 +40,7 @@ export class MediaImportQueue {
         size: file.size,
         status: "queued",
         message: "Queued",
+        warning: getPreflightWarning(file),
         createdAt: now,
         updatedAt: now,
       });
@@ -58,6 +63,29 @@ export class MediaImportQueue {
     this.pump();
   }
 
+  cancel(id: string): void {
+    const item = this.items.find((candidate) => candidate.id === id);
+    if (!item) {
+      return;
+    }
+    if (item.status === "queued") {
+      this.updateItem(item, {
+        status: "canceled",
+        message: "Canceled",
+        error: undefined,
+      });
+      return;
+    }
+    if (item.status === "uploading" || item.status === "converting") {
+      this.canceledIds.add(id);
+      this.updateItem(item, {
+        status: "canceled",
+        message: "Canceled",
+        error: undefined,
+      });
+    }
+  }
+
   remove(id: string): void {
     const index = this.items.findIndex((candidate) => candidate.id === id);
     if (index < 0) {
@@ -74,7 +102,7 @@ export class MediaImportQueue {
   clearCompleted(): void {
     for (let index = this.items.length - 1; index >= 0; index -= 1) {
       const item = this.items[index];
-      if (item.status === "done" || item.status === "error") {
+      if (item.status === "done" || item.status === "error" || item.status === "canceled") {
         this.items.splice(index, 1);
       }
     }
@@ -105,23 +133,34 @@ export class MediaImportQueue {
       });
 
       const result = await this.client.convertFile(item.file, () => {
+        if (this.canceledIds.has(item.id)) {
+          return;
+        }
         this.updateItem(item, {
           status: "converting",
           message: "Converting",
         });
       });
+      if (this.canceledIds.has(item.id)) {
+        this.canceledIds.delete(item.id);
+        return;
+      }
 
       this.updateItem(item, {
         status: "saving",
         message: "Saving",
       });
-      const outputPath = await this.saveMarkdown(item, result.markdown);
+      const outputPath = await this.saveMarkdown(item, result.markdown, result.source);
       this.updateItem(item, {
         status: "done",
         message: "Saved",
         outputPath,
       });
     } catch (error) {
+      if (this.canceledIds.has(item.id)) {
+        this.canceledIds.delete(item.id);
+        return;
+      }
       this.updateItem(item, {
         status: "error",
         message: "Error",
@@ -130,19 +169,20 @@ export class MediaImportQueue {
     }
   }
 
-  private async saveMarkdown(item: MediaImportItem, markdown: string): Promise<string> {
+  private async saveMarkdown(item: MediaImportItem, markdown: string, source: string): Promise<string> {
     const folderPath = normalizeVaultPath(this.getSettings().mediaImportFolder);
     await this.ensureFolder(folderPath);
     const outputPath = await this.resolveOutputPath(folderPath, item.originalName);
+    const content = withImportFrontmatter(markdown, item, source);
     const existing = this.app.vault.getAbstractFileByPath(outputPath);
     if (existing instanceof TFile) {
-      await this.app.vault.modify(existing, markdown);
+      await this.app.vault.modify(existing, content);
       return outputPath;
     }
     if (existing) {
       throw new Error(`Cannot save because a folder exists at: ${outputPath}`);
     }
-    await this.app.vault.create(outputPath, markdown);
+    await this.app.vault.create(outputPath, content);
     return outputPath;
   }
 
@@ -213,6 +253,51 @@ function getMarkdownBaseName(filename: string): string {
   const cleanName = filename.replace(/[\\/]/g, " ").trim() || "Imported document";
   const withoutExtension = cleanName.replace(/\.[^.]+$/, "").trim();
   return withoutExtension || cleanName;
+}
+
+function getPreflightWarning(file: File): string | undefined {
+  const warnings: string[] = [];
+  const extension = getExtension(file.name);
+  if (!extension || !KNOWN_IMPORT_EXTENSIONS.has(extension)) {
+    warnings.push("extension is not in the known MarkItDown format list");
+  }
+  if (file.size >= LARGE_FILE_WARNING_BYTES) {
+    warnings.push(`large file (${formatBytes(file.size)}) may take a while or fail at the proxy`);
+  }
+  return warnings.length ? warnings.join("; ") : undefined;
+}
+
+function withImportFrontmatter(markdown: string, item: MediaImportItem, source: string): string {
+  const frontmatter = [
+    "---",
+    `source_file: ${yamlString(item.originalName)}`,
+    `source: ${yamlString(source)}`,
+    `imported_at: ${yamlString(new Date().toISOString())}`,
+    "converter: markitdown",
+    "---",
+    "",
+  ].join("\n");
+  return `${frontmatter}${markdown.replace(/^\uFEFF/, "").trimStart()}`;
+}
+
+function yamlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function getExtension(filename: string): string {
+  const match = filename.toLocaleLowerCase().match(/\.([^.]+)$/);
+  return match?.[1] ?? "";
+}
+
+function formatBytes(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
 }
 
 function clampConcurrency(value: number): number {

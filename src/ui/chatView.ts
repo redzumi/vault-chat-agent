@@ -270,6 +270,10 @@ export class ChatView extends ItemView {
   }
 
   private async renderMessage(parent: HTMLElement, message: ChatMessage): Promise<void> {
+    if (message.role === "assistant" && message.streaming && !message.content.trim() && !message.reasoningContent?.trim()) {
+      return;
+    }
+
     const cls = [
       "vault-chat-agent-message",
       message.role === "user" ? "vault-chat-agent-message-user" : "vault-chat-agent-message-assistant",
@@ -294,11 +298,12 @@ export class ChatView extends ItemView {
       );
     };
 
-    if (message.reasoningContent && message.role === "assistant" && !message.error) {
+    const reasoningContent = message.reasoningContent?.trim();
+    if (reasoningContent && message.role === "assistant" && !message.error) {
       const reasoningEl = contentEl.createEl("details", { cls: "vault-chat-agent-message-reasoning" });
       reasoningEl.open = !this.getCollapseThinkingByDefault();
       reasoningEl.createEl("summary", { text: "Thinking" });
-      reasoningEl.createDiv({ cls: "vault-chat-agent-message-reasoning-content", text: message.reasoningContent });
+      reasoningEl.createDiv({ cls: "vault-chat-agent-message-reasoning-content", text: reasoningContent });
     }
 
     if (message.role === "assistant" && !message.error && message.streaming) {

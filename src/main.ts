@@ -327,6 +327,10 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
     return this.indexStore.getCoverage();
   }
 
+  async testMarkitdownConnection(): Promise<void> {
+    await this.mediaImportClient.checkHealth();
+  }
+
   refreshChatViews(): void {
     for (const leaf of this.app.workspace.getLeavesOfType(CHAT_VIEW_TYPE)) {
       if (leaf.view instanceof ChatView) {

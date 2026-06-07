@@ -239,6 +239,22 @@ export class ObsidianAIAssistantSettingTab extends PluginSettingTab {
             this.plugin.settings.markitdownApiBaseUrl = value.trim() || DEFAULT_SETTINGS.markitdownApiBaseUrl;
             await this.plugin.savePluginData();
           }),
+      )
+      .addButton((button) =>
+        button.setButtonText("Test").onClick(async () => {
+          button.setDisabled(true);
+          button.setButtonText("Testing...");
+          try {
+            await this.plugin.testMarkitdownConnection();
+            new Notice("Vault Chat Agent: MarkItDown connection is healthy.", 3000);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            new Notice(`Vault Chat Agent: MarkItDown check failed. ${message}`, 7000);
+          } finally {
+            button.setDisabled(false);
+            button.setButtonText("Test");
+          }
+        }),
       );
 
     new Setting(containerEl)

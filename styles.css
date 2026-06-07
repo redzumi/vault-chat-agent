@@ -711,6 +711,10 @@
   border-color: rgba(255, 90, 90, 0.55);
 }
 
+.vault-chat-agent-media-import-item.is-canceled {
+  opacity: 0.78;
+}
+
 .vault-chat-agent-media-import-item.is-done {
   border-color: rgba(80, 200, 120, 0.45);
 }
@@ -758,6 +762,10 @@
   color: var(--text-error);
 }
 
+.vault-chat-agent-media-import-badge.is-canceled {
+  color: var(--text-muted);
+}
+
 .vault-chat-agent-media-import-message {
   color: var(--text-muted);
   font-size: var(--font-ui-small);
@@ -765,6 +773,12 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.vault-chat-agent-media-import-warning {
+  color: var(--text-warning);
+  font-size: var(--font-ui-small);
+  overflow-wrap: anywhere;
 }
 
 .vault-chat-agent-media-import-progress {
@@ -786,6 +800,10 @@
 
 .vault-chat-agent-media-import-item.is-done .vault-chat-agent-media-import-progress-fill {
   background: var(--text-success);
+}
+
+.vault-chat-agent-media-import-item.is-canceled .vault-chat-agent-media-import-progress-fill {
+  background: var(--text-muted);
 }
 
 .vault-chat-agent-media-import-actions {

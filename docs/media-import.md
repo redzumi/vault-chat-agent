@@ -36,7 +36,9 @@ Minimum interface:
 - action to mention a successful import in the current chat draft;
 - action to retry failed imports;
 - action to remove an item from import history;
+- action to cancel queued or active imports;
 - action to clear completed items.
+- preflight warnings for large files and extensions outside the known MarkItDown format list.
 
 File statuses:
 
@@ -46,6 +48,7 @@ File statuses:
 - `saving` - Markdown has been received and is being written to the vault;
 - `done` - file has been saved;
 - `error` - import did not complete.
+- `canceled` - user canceled a queued or active import.
 
 The current MarkItDown API is synchronous, so `uploading` and `converting` are stages of one `POST /convert` request. If the service later adds a job API, the UI can move to polling without changing the user-facing model.
 
@@ -59,6 +62,8 @@ Add plugin settings:
 - `markitdownPassword`: optional Basic Auth password.
 - `mediaImportConcurrency`: number of parallel conversions, default `2`.
 - `mediaImportOverwriteMode`: filename conflict policy.
+
+Settings should include a `Test` action for the MarkItDown API URL and credentials. It calls `GET /health` and reports either a healthy connection or a concrete HTTP/network error.
 
 Filename conflict policy:
 
@@ -116,6 +121,17 @@ The folder is created automatically if it does not exist. If a file already exis
 
 Markdown is saved through the Obsidian Vault API so Obsidian sees it as a normal note and the realtime indexer can process the change.
 
+Imported Markdown should include source metadata:
+
+```yaml
+---
+source_file: "report.pdf"
+source: "report.pdf"
+imported_at: "2026-06-07T19:08:28.000Z"
+converter: markitdown
+---
+```
+
 ## Queue And Concurrency
 
 Import should run through an internal queue.
@@ -126,6 +142,8 @@ Initial policy:
 - start order follows file selection order;
 - one file error does not stop other files;
 - closing the modal does not cancel already running imports;
+- queued imports can be canceled before they start;
+- active upload/conversion requests can be marked canceled; because Obsidian `requestUrl` is used to avoid browser CORS failures, in-flight HTTP work may finish in the background and its result is ignored;
 - the first version does not need to restore unfinished queue items after an Obsidian restart.
 
 If the API or proxy limits request size/rate, the queue should show a clear error on the affected file.
@@ -163,6 +181,5 @@ The current indexer already indexes `.md`, `.txt`, `.csv`, `.json`, and Canvas f
 
 - Should URL import live in the same modal, since the service already supports `url`?
 - Should original files be stored in the vault next to the `.md`, or should the plugin save only Markdown?
-- Should imported Markdown include YAML frontmatter with source, original name, import date, and MIME type?
 - Should users choose the destination folder per import, or only through the global setting?
 - Should the plugin automatically open the saved note after a single-file import?

@@ -26,7 +26,7 @@ export interface ExternalMcpServerSettings {
 }
 
 export type MediaImportOverwriteMode = "rename" | "overwrite" | "skip";
-export type MediaImportStatus = "queued" | "uploading" | "converting" | "saving" | "done" | "error";
+export type MediaImportStatus = "queued" | "uploading" | "converting" | "saving" | "done" | "error" | "canceled";
 
 export interface ObsidianAIAssistantSettings {
   apiKey: string;
@@ -60,6 +60,7 @@ export interface MediaImportItem {
   message: string;
   outputPath?: string;
   error?: string;
+  warning?: string;
   createdAt: number;
   updatedAt: number;
 }

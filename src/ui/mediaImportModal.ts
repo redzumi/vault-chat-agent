@@ -62,7 +62,7 @@ export class MediaImportModal extends Modal {
       attr: { "aria-label": "Clear completed imports" },
     });
     setIcon(clearButton, "list-x");
-    clearButton.disabled = !items.some((item) => item.status === "done" || item.status === "error");
+    clearButton.disabled = !items.some((item) => item.status === "done" || item.status === "error" || item.status === "canceled");
     clearButton.onclick = () => this.queue.clearCompleted();
 
     this.contentEl.createDiv({
@@ -95,6 +95,9 @@ export class MediaImportModal extends Modal {
     const status = meta.createSpan({ cls: "vault-chat-agent-media-import-badge", text: statusLabel(item.status) });
     status.addClass(`is-${item.status}`);
     meta.createSpan({ cls: "vault-chat-agent-media-import-message", text: item.error ?? item.outputPath ?? item.message });
+    if (item.warning && item.status !== "done") {
+      itemEl.createDiv({ cls: "vault-chat-agent-media-import-warning", text: item.warning });
+    }
 
     const progress = itemEl.createDiv({ cls: "vault-chat-agent-media-import-progress" });
     progress.createDiv({
@@ -124,6 +127,14 @@ export class MediaImportModal extends Modal {
     if (item.status === "error") {
       const retryButton = actions.createEl("button", { text: "Retry" });
       retryButton.onclick = () => this.queue.retry(item.id);
+    }
+    if (item.status === "queued" || item.status === "uploading" || item.status === "converting") {
+      const cancelButton = actions.createEl("button", {
+        cls: "vault-chat-agent-toolbar-button",
+        attr: { "aria-label": "Cancel import" },
+      });
+      setIcon(cancelButton, "ban");
+      cancelButton.onclick = () => this.queue.cancel(item.id);
     }
     if (item.status === "done") {
       const copyButton = actions.createEl("button", {
@@ -156,7 +167,8 @@ function buildSummary(items: MediaImportItem[]): string {
   const errors = items.filter((item) => item.status === "error").length;
   const active = items.filter((item) => item.status === "uploading" || item.status === "converting" || item.status === "saving").length;
   const queued = items.filter((item) => item.status === "queued").length;
-  return `${items.length} files. ${done} done, ${active} active, ${queued} queued, ${errors} errors.`;
+  const canceled = items.filter((item) => item.status === "canceled").length;
+  return `${items.length} files. ${done} done, ${active} active, ${queued} queued, ${errors} errors, ${canceled} canceled.`;
 }
 
 function statusLabel(status: MediaImportStatus): string {
@@ -173,6 +185,8 @@ function statusLabel(status: MediaImportStatus): string {
       return "Done";
     case "error":
       return "Error";
+    case "canceled":
+      return "Canceled";
   }
 }
 
@@ -189,6 +203,8 @@ function statusProgress(status: MediaImportStatus): number {
     case "done":
       return 100;
     case "error":
+      return 100;
+    case "canceled":
       return 100;
   }
 }
