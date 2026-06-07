@@ -27,7 +27,7 @@ test("completeWithAgent handles a read-only user request with a tool call and fi
   });
   const client = createClient();
 
-  const result = await client.completeWithAgent("что у меня из файлов", [], tools, "ask");
+  const result = await client.completeWithAgent("what files do I have", [], tools, "ask");
 
   equal(result.answer, "You have A.md and Projects/B.md.");
   deepEqual(result.workingSet, [{ path: "/", role: "listed", detail: "Listed vault root" }]);
@@ -102,7 +102,7 @@ test("completeWithAgent aggregates pending edits returned by edit tools", async 
   const client = createClient();
 
   const result = await client.completeWithAgent(
-    "добавь заголовок",
+    "add a heading",
     [],
     fakeMcpServer({
       proposePatch: {
@@ -126,7 +126,7 @@ test("completeWithAgent in plan mode exposes only read tools and asks for a plan
   const client = createClient();
 
   const result = await client.completeWithAgent(
-    "план изменений",
+    "change plan",
     [],
     fakeMcpServer({}),
     "edit",
@@ -160,7 +160,7 @@ test("completeWithAgent includes authoritative runtime metadata in the system pr
   const requests = mockProviderResponses([assistantText("Today is June 4, 2026.")]);
   const client = createClient({}, metadata);
 
-  await client.completeWithAgent("какой сегодня год", [], fakeMcpServer({}), "ask");
+  await client.completeWithAgent("what year is it today", [], fakeMcpServer({}), "ask");
 
   const systemPrompt = String(requests[0].messages[0].content);
   equal(systemPrompt.includes("Runtime metadata is authoritative"), true);
@@ -278,7 +278,7 @@ test("completeWithAgent executes multiple tool calls from one assistant response
     calls,
   );
 
-  const result = await client.completeWithAgent("что связано с текущей заметкой", [], server, "ask");
+  const result = await client.completeWithAgent("what is related to the current note", [], server, "ask");
 
   deepEqual(calls, ["getCurrentNote", "getLinks"]);
   equal(result.answer, "Daily.md links to Project.md.");

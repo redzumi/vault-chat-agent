@@ -633,3 +633,164 @@
 .vault-chat-agent-related-actions button {
   font-size: var(--font-ui-small);
 }
+
+.vault-chat-agent-media-import-modal {
+  height: min(720px, 86vh);
+  width: min(720px, 92vw);
+}
+
+.vault-chat-agent-media-import-modal .modal-content {
+  display: flex;
+  height: 100%;
+  padding: 0;
+}
+
+.vault-chat-agent-media-import-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  width: 100%;
+}
+
+.vault-chat-agent-media-import-toolbar {
+  align-items: center;
+  border-bottom: 1px solid var(--background-modifier-border);
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  padding: 8px;
+}
+
+.vault-chat-agent-media-import-title {
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vault-chat-agent-media-import-toolbar-actions {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.vault-chat-agent-hidden-file-input {
+  display: none;
+}
+
+.vault-chat-agent-media-import-status {
+  border-bottom: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  padding: 8px 12px;
+}
+
+.vault-chat-agent-media-import-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.vault-chat-agent-media-import-item {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+.vault-chat-agent-media-import-item.is-error {
+  border-color: rgba(255, 90, 90, 0.55);
+}
+
+.vault-chat-agent-media-import-item.is-done {
+  border-color: rgba(80, 200, 120, 0.45);
+}
+
+.vault-chat-agent-media-import-item-header {
+  align-items: start;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) max-content;
+}
+
+.vault-chat-agent-media-import-name {
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.vault-chat-agent-media-import-size {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+
+.vault-chat-agent-media-import-meta {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
+.vault-chat-agent-media-import-badge {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.4;
+  padding: 1px 6px;
+}
+
+.vault-chat-agent-media-import-badge.is-done {
+  color: var(--text-success);
+}
+
+.vault-chat-agent-media-import-badge.is-error {
+  color: var(--text-error);
+}
+
+.vault-chat-agent-media-import-message {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vault-chat-agent-media-import-progress {
+  background: var(--background-primary);
+  border-radius: 999px;
+  height: 4px;
+  overflow: hidden;
+}
+
+.vault-chat-agent-media-import-progress-fill {
+  background: var(--interactive-accent);
+  height: 100%;
+  transition: width 160ms ease;
+}
+
+.vault-chat-agent-media-import-item.is-error .vault-chat-agent-media-import-progress-fill {
+  background: var(--text-error);
+}
+
+.vault-chat-agent-media-import-item.is-done .vault-chat-agent-media-import-progress-fill {
+  background: var(--text-success);
+}
+
+.vault-chat-agent-media-import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}

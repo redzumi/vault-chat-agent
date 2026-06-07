@@ -2,7 +2,7 @@ import { App, Editor, MarkdownFileInfo, MarkdownView, Notice, Plugin, SuggestMod
 import { ObsidianAgentTools } from "./agent/obsidianTools";
 import { SemanticChunker } from "./core/chunker";
 import { IndexStore } from "./core/indexStore";
-import { ChatIntent, ChatSearchScopeMode, DEFAULT_SETTINGS, ExternalMcpServerSettings, ObsidianAIAssistantSettings, IndexCoverage, PersistedIndex, SavedPrompt } from "./core/types";
+import { ChatIntent, ChatSearchScopeMode, DEFAULT_SETTINGS, ExternalMcpServerSettings, ObsidianAIAssistantSettings, IndexCoverage, MediaImportOverwriteMode, PersistedIndex, SavedPrompt } from "./core/types";
 import { indexVaultFiles, syncVaultIndex } from "./indexing/indexAll";
 import { isIndexableVaultFileLike } from "./indexing/indexableFiles";
 import { RealtimeIndexer } from "./indexing/realtimeIndexer";
@@ -10,9 +10,12 @@ import { GraphSearchEngine } from "./search/graphSearch";
 import { HybridSearchEngine } from "./search/hybridSearch";
 import { AIChatClient } from "./services/aiChatClient";
 import { CHAT_VIEW_TYPE, ChatView } from "./ui/chatView";
+import { MediaImportModal } from "./ui/mediaImportModal";
 import { RELATED_NOTES_VIEW_TYPE, RelatedNotesView } from "./ui/relatedNotesView";
 import { ObsidianAIAssistantSettingTab } from "./ui/settingsTab";
 import { RemoteMcpManager } from "./mcp/remoteMcpClient";
+import { MediaImportClient } from "./services/mediaImportClient";
+import { MediaImportQueue } from "./services/mediaImportQueue";
 
 interface PluginData {
   settings?: Partial<ObsidianAIAssistantSettings> & {
@@ -40,6 +43,12 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
     () => this.settings,
     () => this.indexStore.getVaultOverview(),
   );
+  private readonly mediaImportClient = new MediaImportClient(() => this.settings);
+  private readonly mediaImportQueue = new MediaImportQueue(
+    this.app,
+    this.mediaImportClient,
+    () => this.settings,
+  );
   private realtimeIndexer: RealtimeIndexer | null = null;
   private indexingPromise: Promise<void> | null = null;
   private layoutReady = false;
@@ -59,6 +68,9 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
           this.remoteMcpManager,
           () => this.settings.developerMode,
           () => this.settings.collapseThinkingByDefault,
+          () => {
+            void this.openMediaImportModal();
+          },
           this.settings.defaultIntent,
         ),
     );
@@ -374,6 +386,13 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
     return view;
   }
 
+  private async openMediaImportModal(): Promise<void> {
+    const chatView = await this.activateView();
+    new MediaImportModal(this.app, this.mediaImportQueue, (path) => {
+      chatView?.mentionPath(path);
+    }).open();
+  }
+
   private async startRelatedNoteChat(path: string): Promise<void> {
     const view = await this.activateView();
     if (!view) {
@@ -580,12 +599,22 @@ function migrateSettings(settings: PluginData["settings"]): ObsidianAIAssistantS
     ...DEFAULT_SETTINGS,
     ...currentSettings,
     defaultIntent,
+    mediaImportConcurrency: normalizeMediaImportConcurrency(currentSettings.mediaImportConcurrency),
+    mediaImportOverwriteMode: normalizeMediaImportOverwriteMode(currentSettings.mediaImportOverwriteMode),
     externalMcpServers: normalizeExternalMcpServers(currentSettings.externalMcpServers),
   };
 }
 
 function isChatIntent(value: unknown): value is ChatIntent {
   return value === "ask" || value === "edit";
+}
+
+function normalizeMediaImportConcurrency(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(1, Math.min(4, Math.floor(value))) : DEFAULT_SETTINGS.mediaImportConcurrency;
+}
+
+function normalizeMediaImportOverwriteMode(value: unknown): MediaImportOverwriteMode {
+  return value === "rename" || value === "overwrite" || value === "skip" ? value : DEFAULT_SETTINGS.mediaImportOverwriteMode;
 }
 
 function normalizeExternalMcpServers(value: unknown): ExternalMcpServerSettings[] {

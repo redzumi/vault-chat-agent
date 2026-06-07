@@ -209,6 +209,94 @@ export class ObsidianAIAssistantSettingTab extends PluginSettingTab {
         }),
       );
 
+    containerEl.createEl("h3", { text: "Media import" });
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text: "Convert PDF, DOCX, CSV, and other documents to Markdown notes through MarkItDown.",
+    });
+
+    new Setting(containerEl)
+      .setName("Import folder")
+      .setDesc("Vault folder where converted Markdown files are saved.")
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_SETTINGS.mediaImportFolder)
+          .setValue(this.plugin.settings.mediaImportFolder)
+          .onChange(async (value) => {
+            this.plugin.settings.mediaImportFolder = value.trim() || DEFAULT_SETTINGS.mediaImportFolder;
+            await this.plugin.savePluginData();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("MarkItDown API URL")
+      .setDesc("Base URL. The plugin calls /convert with multipart/form-data.")
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_SETTINGS.markitdownApiBaseUrl)
+          .setValue(this.plugin.settings.markitdownApiBaseUrl)
+          .onChange(async (value) => {
+            this.plugin.settings.markitdownApiBaseUrl = value.trim() || DEFAULT_SETTINGS.markitdownApiBaseUrl;
+            await this.plugin.savePluginData();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("MarkItDown username")
+      .setDesc("Optional Basic Auth username for the MarkItDown service.")
+      .addText((text) =>
+        text
+          .setPlaceholder("Username")
+          .setValue(this.plugin.settings.markitdownUsername)
+          .onChange(async (value) => {
+            this.plugin.settings.markitdownUsername = value.trim();
+            await this.plugin.savePluginData();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("MarkItDown password")
+      .setDesc("Optional Basic Auth password for the MarkItDown service.")
+      .addText((text) => {
+        text.inputEl.type = "password";
+        text
+          .setPlaceholder("Password")
+          .setValue(this.plugin.settings.markitdownPassword)
+          .onChange(async (value) => {
+            this.plugin.settings.markitdownPassword = value;
+            await this.plugin.savePluginData();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Parallel imports")
+      .setDesc("Maximum concurrent MarkItDown conversions.")
+      .addSlider((slider) =>
+        slider
+          .setLimits(1, 4, 1)
+          .setDynamicTooltip()
+          .setValue(this.plugin.settings.mediaImportConcurrency)
+          .onChange(async (value) => {
+            this.plugin.settings.mediaImportConcurrency = value;
+            await this.plugin.savePluginData();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Name conflicts")
+      .setDesc("What to do when the target Markdown file already exists.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("rename", "Rename")
+          .addOption("overwrite", "Overwrite")
+          .addOption("skip", "Skip")
+          .setValue(this.plugin.settings.mediaImportOverwriteMode)
+          .onChange(async (value) => {
+            this.plugin.settings.mediaImportOverwriteMode = value === "overwrite" || value === "skip" ? value : "rename";
+            await this.plugin.savePluginData();
+          }),
+      );
+
     containerEl.createEl("h3", { text: "External MCP servers" });
     containerEl.createEl("p", {
       cls: "setting-item-description",

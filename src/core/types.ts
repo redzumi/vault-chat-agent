@@ -25,6 +25,9 @@ export interface ExternalMcpServerSettings {
   enabled: boolean;
 }
 
+export type MediaImportOverwriteMode = "rename" | "overwrite" | "skip";
+export type MediaImportStatus = "queued" | "uploading" | "converting" | "saving" | "done" | "error";
+
 export interface ObsidianAIAssistantSettings {
   apiKey: string;
   model: string;
@@ -38,8 +41,27 @@ export interface ObsidianAIAssistantSettings {
   stripReasoningBlocks: boolean;
   collapseThinkingByDefault: boolean;
   developerMode: boolean;
+  mediaImportFolder: string;
+  markitdownApiBaseUrl: string;
+  markitdownUsername: string;
+  markitdownPassword: string;
+  mediaImportConcurrency: number;
+  mediaImportOverwriteMode: MediaImportOverwriteMode;
   externalMcpServers: ExternalMcpServerSettings[];
   savedPrompts: SavedPrompt[];
+}
+
+export interface MediaImportItem {
+  id: string;
+  file: File;
+  originalName: string;
+  size: number;
+  status: MediaImportStatus;
+  message: string;
+  outputPath?: string;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface DebugLogEntry {
@@ -176,6 +198,12 @@ export const DEFAULT_SETTINGS: ObsidianAIAssistantSettings = {
   stripReasoningBlocks: true,
   collapseThinkingByDefault: false,
   developerMode: false,
+  mediaImportFolder: "Imported Media",
+  markitdownApiBaseUrl: "https://markitdown.redz.sbs",
+  markitdownUsername: "",
+  markitdownPassword: "",
+  mediaImportConcurrency: 2,
+  mediaImportOverwriteMode: "rename",
   savedPrompts: [],
   systemPrompt: "Assume the user is not a developer. Explain technical details in plain language, avoid unnecessary implementation jargon, and ask before expecting them to make code-level decisions.",
   externalMcpServers: [],

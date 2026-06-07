@@ -34,6 +34,7 @@ type PanelId = "edits" | "workingSet" | "sources" | "debug";
 
 export class ChatView extends ItemView {
   private messages: ChatMessage[] = [];
+  private draftText = "";
   private intent: ChatIntent;
   private runMode: ChatRunMode = "direct";
   private lastSources: SearchResult[] = [];
@@ -65,6 +66,7 @@ export class ChatView extends ItemView {
     private readonly remoteMcpManager: RemoteMcpManager,
     private readonly getDeveloperMode: () => boolean,
     private readonly getCollapseThinkingByDefault: () => boolean,
+    private readonly openMediaImport: () => void,
     defaultIntent: ChatIntent,
   ) {
     super(leaf);
@@ -141,6 +143,13 @@ export class ChatView extends ItemView {
         });
       };
     }
+
+    const importButton = toolbar.createEl("button", {
+      cls: "vault-chat-agent-toolbar-button",
+      attr: { "aria-label": "Import media documents" },
+    });
+    setIcon(importButton, "file-input");
+    importButton.onclick = () => this.openMediaImport();
 
     const clearButton = toolbar.createEl("button", { attr: { "aria-label": "Clear chat" } });
     setIcon(clearButton, "trash-2");
@@ -491,6 +500,7 @@ export class ChatView extends ItemView {
         placeholder: this.intent === "edit" && this.runMode === "plan" ? "Ask for a plan..." : this.intent === "edit" ? "Ask for reviewed changes..." : "Ask about your vault...",
       },
     });
+    textarea.value = this.draftText;
     const sendButton = inputRow.createEl("button", { cls: "mod-cta", attr: { "aria-label": "Send" } });
     setIcon(sendButton, "send");
     sendButton.disabled = this.isSending;
@@ -522,6 +532,7 @@ export class ChatView extends ItemView {
       if (this.handleSlashCommandInput(value)) {
         return;
       }
+      this.draftText = "";
       void this.sendMessage(value);
     };
 
@@ -626,6 +637,7 @@ export class ChatView extends ItemView {
   }
 
   private updateInputState(textarea: HTMLTextAreaElement, mentionsEl: HTMLElement, suggestionsEl: HTMLElement, commandSuggestionsEl: HTMLElement): void {
+    this.draftText = textarea.value;
     this.draftMentions = parseMentions(textarea.value, (path) => this.resolveMentionPath(path));
     this.renderDraftMentions(mentionsEl);
     this.commandSuggestions = this.getSlashCommandSuggestions(textarea);
@@ -695,6 +707,7 @@ export class ChatView extends ItemView {
     const needsSpace = after.length === 0 || /^\s/.test(after) ? "" : " ";
     const inserted = `${suggestion.insertText}${needsSpace}`;
     textarea.value = `${before}${inserted}${after}`;
+    this.draftText = textarea.value;
     const cursor = before.length + inserted.length;
     textarea.setSelectionRange(cursor, cursor);
     textarea.focus();
@@ -746,9 +759,18 @@ export class ChatView extends ItemView {
     const after = textarea.value.slice(trigger.to).replace(/^\s*/, "");
     const inserted = `${command.name} `;
     textarea.value = `${before}${inserted}${after}`;
+    this.draftText = textarea.value;
     const cursor = before.length + inserted.length;
     textarea.setSelectionRange(cursor, cursor);
     textarea.focus();
+  }
+
+  mentionPath(path: string): void {
+    const mention = `@[[${path.replace(/\.md$/i, "")}]]`;
+    const separator = this.draftText.trim() ? " " : "";
+    this.draftText = `${this.draftText.trimEnd()}${separator}${mention} `;
+    this.draftMentions = parseMentions(this.draftText, (rawPath) => this.resolveMentionPath(rawPath));
+    this.render();
   }
 
   private handleSlashCommandInput(value: string): boolean {
