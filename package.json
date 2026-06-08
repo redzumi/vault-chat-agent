@@ -1,6 +1,6 @@
 {
   "name": "vault-chat-agent",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Chat with an AI assistant that can search your vault, inspect notes, and prepare edits for review.",
   "main": "main.js",
   "scripts": {
