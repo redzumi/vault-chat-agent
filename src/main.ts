@@ -234,8 +234,6 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
   onunload(): void {
     this.realtimeIndexer?.stop();
     void this.remoteMcpManager.close();
-    this.app.workspace.detachLeavesOfType(CHAT_VIEW_TYPE);
-    this.app.workspace.detachLeavesOfType(RELATED_NOTES_VIEW_TYPE);
   }
 
   async loadPluginData(): Promise<void> {

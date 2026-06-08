@@ -15,7 +15,7 @@ export class ObsidianAIAssistantSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "Vault Chat Agent" });
+    new Setting(containerEl).setName("Vault Chat Agent").setHeading();
 
     new Setting(containerEl)
       .setName("Provider preset")
@@ -209,7 +209,7 @@ export class ObsidianAIAssistantSettingTab extends PluginSettingTab {
         }),
       );
 
-    containerEl.createEl("h3", { text: "Media import" });
+    new Setting(containerEl).setName("Media import").setHeading();
     containerEl.createEl("p", {
       cls: "setting-item-description",
       text: "Convert PDF, DOCX, CSV, and other documents to Markdown notes through MarkItDown.",
@@ -313,7 +313,7 @@ export class ObsidianAIAssistantSettingTab extends PluginSettingTab {
           }),
       );
 
-    containerEl.createEl("h3", { text: "External MCP servers" });
+    new Setting(containerEl).setName("External MCP servers").setHeading();
     containerEl.createEl("p", {
       cls: "setting-item-description",
       text: "External MCP servers exposed to the agent as read-only tools. Remote HTTPS Streamable HTTP endpoints are supported.",
@@ -426,7 +426,7 @@ export class ObsidianAIAssistantSettingTab extends PluginSettingTab {
       }
     }
 
-    containerEl.createEl("h3", { text: "Saved prompts" });
+    new Setting(containerEl).setName("Saved prompts").setHeading();
     containerEl.createEl("p", {
       cls: "setting-item-description",
       text: "Reusable prompts for the Prompt: run saved prompt command. Edit prompts can propose reviewed patches; Ask prompts only answer in chat.",
@@ -499,7 +499,7 @@ export class ObsidianAIAssistantSettingTab extends PluginSettingTab {
         });
     }
 
-    containerEl.createEl("h3", { text: "Index" });
+    new Setting(containerEl).setName("Index").setHeading();
     const coverage = this.plugin.getIndexCoverage();
     containerEl.createEl("p", {
       cls: "setting-item-description",
