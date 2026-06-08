@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownFileInfo, MarkdownView, Notice, Plugin, SuggestModal, WorkspaceLeaf } from "obsidian";
+import { App, Editor, MarkdownFileInfo, MarkdownView, Notice, Plugin, requestUrl, SuggestModal, WorkspaceLeaf } from "obsidian";
 import { ObsidianAgentTools } from "./agent/obsidianTools";
 import { SemanticChunker } from "./core/chunker";
 import { IndexStore } from "./core/indexStore";
@@ -42,6 +42,8 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
   private readonly aiChatClient = new AIChatClient(
     () => this.settings,
     () => this.indexStore.getVaultOverview(),
+    undefined,
+    requestUrl,
   );
   private readonly mediaImportClient = new MediaImportClient(() => this.settings);
   private readonly mediaImportQueue = new MediaImportQueue(

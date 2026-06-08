@@ -4,6 +4,22 @@ import { ChatProviderAdapter, ProviderAssistantMessage, ProviderMessage } from "
 
 type DebugLogger = (entry: DebugLogEntry) => void;
 
+export interface ChatCompletionRequest {
+  url: string;
+  method: "POST";
+  headers: Record<string, string>;
+  body: string;
+  contentType: "application/json";
+  throw: false;
+}
+
+export interface ChatCompletionResponse {
+  status: number;
+  text: string;
+}
+
+export type ChatCompletionRequester = (request: ChatCompletionRequest) => Promise<ChatCompletionResponse>;
+
 interface CompletionStreamHandlers {
   onContentDelta: (delta: string) => void;
   onReasoningDelta?: (delta: string) => void;
@@ -30,6 +46,7 @@ export class AIChatClient {
     private readonly getSettings: () => ObsidianAIAssistantSettings,
     private readonly getVaultOverview: () => string,
     private readonly getRuntimeMetadata: () => AgentRuntimeMetadata = createRuntimeMetadata,
+    private readonly requester?: ChatCompletionRequester,
   ) {}
 
   async completeWithAgent(
@@ -184,14 +201,22 @@ export class AIChatClient {
       body: request.body,
     });
 
-    let response: Response;
+    if (!this.requester) {
+      throw new Error("AI provider request client is not configured.");
+    }
+
+    let response: ChatCompletionResponse;
     try {
-      response = await fetch(request.url, {
+      throwIfAborted(signal);
+      response = await this.requester({
+        url: request.url,
         method: "POST",
         headers,
         body: JSON.stringify(request.body),
-        signal,
+        contentType: "application/json",
+        throw: false,
       });
+      throwIfAborted(signal);
     } catch (error) {
       emitDebug(logDebug, "model-error", `Request ${step ?? "?"} failed before a response`, {
         step,
@@ -201,8 +226,8 @@ export class AIChatClient {
       throw error;
     }
 
-    if (!response.ok) {
-      const errorText = await response.text();
+    if (response.status >= 400) {
+      const errorText = response.text;
       emitDebug(logDebug, "model-error", `Request ${step ?? "?"} failed with ${response.status}`, {
         step,
         status: response.status,
@@ -212,8 +237,8 @@ export class AIChatClient {
       throw new Error(`AI provider request failed (${response.status}): ${errorText}`);
     }
 
-    if (streamHandlers && response.body) {
-      const message = await readStreamingCompletion(response, streamHandlers);
+    if (streamHandlers && isStreamingResponseText(response.text)) {
+      const message = readStreamingCompletion(response.text, streamHandlers);
       emitDebug(logDebug, "model-response", `Streaming response ${step ?? "?"} from ${settings.model}`, {
         step,
         status: response.status,
@@ -223,7 +248,7 @@ export class AIChatClient {
       return message;
     }
 
-    const data = await response.json();
+    const data = parseJson(response.text);
     const message = this.providerAdapter.parseResponse(data);
     if (!message) {
       emitDebug(logDebug, "model-error", `Request ${step ?? "?"} returned an unexpected response`, {
@@ -350,15 +375,8 @@ export function createRuntimeMetadata(now = new Date()): AgentRuntimeMetadata {
   };
 }
 
-async function readStreamingCompletion(response: Response, streamHandlers: CompletionStreamHandlers): Promise<ProviderAssistantMessage> {
-  if (!response.body) {
-    throw new Error("AI provider returned an empty streaming response.");
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
+function readStreamingCompletion(responseText: string, streamHandlers: CompletionStreamHandlers): ProviderAssistantMessage {
   const toolCallParts = new Map<number, { id?: string; name?: string; argumentsJson: string }>();
-  let buffer = "";
   let content = "";
   let reasoning = "";
   let reasoningContent = "";
@@ -366,82 +384,71 @@ async function readStreamingCompletion(response: Response, streamHandlers: Compl
   let hasToolCalls = false;
   let emittedPreview = false;
 
-  for (;;) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done });
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? "";
+  for (const line of responseText.split(/\r?\n/)) {
+    const data = line.startsWith("data:") ? line.slice("data:".length).trim() : "";
+    if (!data || data === "[DONE]") {
+      continue;
+    }
 
-    for (const line of lines) {
-      const data = line.startsWith("data:") ? line.slice("data:".length).trim() : "";
-      if (!data || data === "[DONE]") {
-        continue;
-      }
+    const chunk = parseJsonRecord(data);
+    if (!chunk) {
+      continue;
+    }
+    const choices = chunk.choices;
+    if (!Array.isArray(choices) || !isRecord(choices[0])) {
+      continue;
+    }
+    const delta = choices[0].delta;
+    if (!isRecord(delta)) {
+      continue;
+    }
 
-      const chunk = parseJsonRecord(data);
-      if (!chunk) {
-        continue;
-      }
-      const choices = chunk.choices;
-      if (!Array.isArray(choices) || !isRecord(choices[0])) {
-        continue;
-      }
-      const delta = choices[0].delta;
-      if (!isRecord(delta)) {
-        continue;
-      }
-
-      const contentDelta = typeof delta.content === "string" ? delta.content : "";
-      if (contentDelta) {
-        content += contentDelta;
-        if (!hasToolCalls) {
-          emittedPreview = true;
-          streamHandlers.onContentDelta(contentDelta);
-        }
-      }
-
-      if (typeof delta.reasoning === "string") {
-        reasoning += delta.reasoning;
-      }
-      if (typeof delta.reasoning_content === "string") {
-        reasoningContent += delta.reasoning_content;
-        streamHandlers.onReasoningDelta?.(delta.reasoning_content);
-      }
-      if (delta.reasoning_details !== undefined) {
-        reasoningDetails = delta.reasoning_details;
-      }
-
-      if (Array.isArray(delta.tool_calls)) {
-        if (!hasToolCalls && emittedPreview) {
-          streamHandlers.onContentReset();
-          emittedPreview = false;
-        }
-        hasToolCalls = true;
-        for (const toolCallDelta of delta.tool_calls) {
-          if (!isRecord(toolCallDelta)) {
-            continue;
-          }
-          const index = typeof toolCallDelta.index === "number" ? toolCallDelta.index : 0;
-          const existing = toolCallParts.get(index) ?? { argumentsJson: "" };
-          if (typeof toolCallDelta.id === "string") {
-            existing.id = toolCallDelta.id;
-          }
-          const fn = toolCallDelta.function;
-          if (isRecord(fn)) {
-            if (typeof fn.name === "string") {
-              existing.name = fn.name;
-            }
-            if (typeof fn.arguments === "string") {
-              existing.argumentsJson += fn.arguments;
-            }
-          }
-          toolCallParts.set(index, existing);
-        }
+    const contentDelta = typeof delta.content === "string" ? delta.content : "";
+    if (contentDelta) {
+      content += contentDelta;
+      if (!hasToolCalls) {
+        emittedPreview = true;
+        streamHandlers.onContentDelta(contentDelta);
       }
     }
 
-    if (done) {
-      break;
+    if (typeof delta.reasoning === "string") {
+      reasoning += delta.reasoning;
+    }
+    if (typeof delta.reasoning_content === "string") {
+      reasoningContent += delta.reasoning_content;
+      streamHandlers.onReasoningDelta?.(delta.reasoning_content);
+    }
+    if (delta.reasoning_details !== undefined) {
+      reasoningDetails = delta.reasoning_details;
+    }
+
+    if (Array.isArray(delta.tool_calls)) {
+      if (!hasToolCalls && emittedPreview) {
+        streamHandlers.onContentReset();
+        emittedPreview = false;
+      }
+      hasToolCalls = true;
+      for (const toolCallDelta of delta.tool_calls) {
+        if (!isRecord(toolCallDelta)) {
+          continue;
+        }
+        const index = typeof toolCallDelta.index === "number" ? toolCallDelta.index : 0;
+        const existing = toolCallParts.get(index) ?? { argumentsJson: "" };
+        if (typeof toolCallDelta.id === "string") {
+          existing.id = toolCallDelta.id;
+        }
+        const fn = toolCallDelta.function;
+        if (isRecord(fn)) {
+          if (typeof fn.name === "string") {
+            existing.name = fn.name;
+          }
+          if (typeof fn.arguments === "string") {
+            existing.argumentsJson += fn.arguments;
+          }
+        }
+        toolCallParts.set(index, existing);
+      }
     }
   }
 
@@ -474,6 +481,18 @@ async function readStreamingCompletion(response: Response, streamHandlers: Compl
     toolCalls,
     raw,
   };
+}
+
+function isStreamingResponseText(text: string): boolean {
+  return text.split(/\r?\n/, 1)[0]?.startsWith("data:") ?? false;
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | null {

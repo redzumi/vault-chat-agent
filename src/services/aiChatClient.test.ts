@@ -1,18 +1,14 @@
-import { afterEach, test } from "node:test";
 import { deepEqual, equal, notEqual } from "node:assert/strict";
+import { test } from "node:test";
 import { AgentToolExecution, ChatIntent, DEFAULT_SETTINGS, McpToolCallContext, McpToolDefinition, McpToolServer, ObsidianAIAssistantSettings } from "../core/types";
-import { AgentRuntimeMetadata, AIChatClient } from "./aiChatClient";
-
-const originalFetch = globalThis.fetch;
+import { AgentRuntimeMetadata, AIChatClient, ChatCompletionRequest, ChatCompletionRequester, ChatCompletionResponse } from "./aiChatClient";
 
 interface CapturedRequestBody {
   messages: Array<Record<string, unknown>>;
   [key: string]: unknown;
 }
 
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
+let providerRequester: ChatCompletionRequester = async () => createProviderResponse(500, JSON.stringify({ error: "No mocked response." }));
 
 test("completeWithAgent handles a read-only user request with a tool call and final answer", async () => {
   const requests = mockProviderResponses([
@@ -299,6 +295,7 @@ function createClient(settings: Partial<ObsidianAIAssistantSettings> = {}, metad
     }),
     () => "2 markdown files indexed.",
     metadata ? () => metadata : undefined,
+    (request) => providerRequester(request),
   );
 }
 
@@ -343,33 +340,37 @@ function fakeMcpServer(results: Record<string, AgentToolExecution>, calls: strin
 function mockProviderResponses(responses: unknown[]): CapturedRequestBody[] {
   const requests: CapturedRequestBody[] = [];
   let index = 0;
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-    notEqual(init?.body, undefined);
-    requests.push(JSON.parse(String(init?.body)) as CapturedRequestBody);
+  providerRequester = async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
+    notEqual(request.body, undefined);
+    requests.push(JSON.parse(request.body) as CapturedRequestBody);
     const response = responses[index];
     index += 1;
     if (response === undefined) {
-      return new Response(JSON.stringify({ error: "No mocked response." }), { status: 500 });
+      return createProviderResponse(500, JSON.stringify({ error: "No mocked response." }));
     }
-    return new Response(JSON.stringify(response), { status: 200, headers: { "Content-Type": "application/json" } });
-  }) as typeof fetch;
+    return createProviderResponse(200, JSON.stringify(response));
+  };
   return requests;
 }
 
 function mockProviderStreamResponses(responses: string[]): CapturedRequestBody[] {
   const requests: CapturedRequestBody[] = [];
   let index = 0;
-  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-    notEqual(init?.body, undefined);
-    requests.push(JSON.parse(String(init?.body)) as CapturedRequestBody);
+  providerRequester = async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
+    notEqual(request.body, undefined);
+    requests.push(JSON.parse(request.body) as CapturedRequestBody);
     const response = responses[index];
     index += 1;
     if (response === undefined) {
-      return new Response(JSON.stringify({ error: "No mocked response." }), { status: 500 });
+      return createProviderResponse(500, JSON.stringify({ error: "No mocked response." }));
     }
-    return new Response(response, { status: 200, headers: { "Content-Type": "text/event-stream" } });
-  }) as typeof fetch;
+    return createProviderResponse(200, response);
+  };
   return requests;
+}
+
+function createProviderResponse(status: number, text: string): ChatCompletionResponse {
+  return { status, text };
 }
 
 function streamChunk(delta: Record<string, unknown>): string {
