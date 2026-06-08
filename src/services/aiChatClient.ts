@@ -504,7 +504,7 @@ function getPlatform(): string {
 }
 
 function getNavigatorLike(): { language?: string; languages?: readonly string[]; platform?: string } | undefined {
-  return typeof globalThis.navigator === "object" ? globalThis.navigator : undefined;
+  return typeof window === "object" && typeof window.navigator === "object" ? window.navigator : undefined;
 }
 
 function formatDate(date: Date, locale: string, timeZone: string): string {

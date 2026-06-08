@@ -5,6 +5,7 @@ import { MAX_INDEXABLE_FILE_BYTES, isIndexableVaultFileLike, isIndexableVaultPat
 test("isIndexableVaultPath excludes service and hidden paths", () => {
   equal(isIndexableVaultPath("Notes/Project.md"), true);
   equal(isIndexableVaultPath(".obsidian/plugins/vault-chat-agent/data.json"), false);
+  equal(isIndexableVaultPath("Config/plugins/vault-chat-agent/data.json", { configDir: "Config" }), false);
   equal(isIndexableVaultPath("Notes/.hidden.md"), false);
   equal(isIndexableVaultPath(".git/config"), false);
   equal(isIndexableVaultPath("node_modules/pkg/index.js"), false);

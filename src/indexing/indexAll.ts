@@ -25,7 +25,7 @@ export async function indexVaultFiles(
   chunker: SemanticChunker,
   indexStore: IndexStore,
 ): Promise<VaultIndexResult> {
-  const files = vault.getFiles().filter(isIndexableVaultFile);
+  const files = vault.getFiles().filter((file) => isIndexableVaultFile(file, vault.configDir));
   const notice = new Notice(`Vault Chat Agent: indexing 0/${files.length} files...`, 0);
   indexStore.clear();
 
@@ -61,7 +61,7 @@ export async function syncVaultIndex(
   chunker: SemanticChunker,
   indexStore: IndexStore,
 ): Promise<VaultSyncResult> {
-  const files = vault.getFiles().filter(isIndexableVaultFile);
+  const files = vault.getFiles().filter((file) => isIndexableVaultFile(file, vault.configDir));
   const filesByPath = new Map(files.map((file) => [file.path, file]));
   const documentsByPath = new Map(indexStore.getAllDocuments().map((document) => [document.path, document]));
   const changedFiles = files.filter((file) => {
@@ -125,7 +125,7 @@ export async function indexVaultFile(
   indexStore: IndexStore,
   file: TFile,
 ): Promise<void> {
-  if (!isIndexableVaultFile(file)) {
+  if (!isIndexableVaultFile(file, vault.configDir)) {
     indexStore.deleteFile(file.path);
     return;
   }
@@ -159,8 +159,8 @@ export async function indexVaultFile(
   }
 }
 
-export function isIndexableVaultFile(file: TFile): boolean {
-  return isIndexableVaultFileLike(file);
+export function isIndexableVaultFile(file: TFile, configDir?: string): boolean {
+  return isIndexableVaultFileLike(file, { configDir });
 }
 
 function yieldToMainThread(): Promise<void> {

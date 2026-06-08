@@ -97,120 +97,120 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: "open-vault-chat-agent-chat",
-      name: "Open Vault Chat Agent chat",
+      id: "open-chat",
+      name: "Open chat",
       callback: () => {
         void this.activateView();
       },
     });
 
     this.addCommand({
-      id: "open-vault-chat-agent-related-notes",
-      name: "Open Vault Chat Agent related notes",
+      id: "open-related-notes",
+      name: "Open related notes",
       callback: () => {
         void this.activateRelatedNotesView();
       },
     });
 
     this.addCommand({
-      id: "reindex-vault-chat-agent",
-      name: "Re-index vault for Vault Chat Agent",
+      id: "reindex-vault",
+      name: "Re-index vault",
       callback: () => {
         void this.indexVault();
       },
     });
 
     this.addCommand({
-      id: "summarize-current-note-vault-chat-agent",
-      name: "Vault Chat Agent: summarize current note",
+      id: "summarize-current-note",
+      name: "Summarize current note",
       callback: () => {
         void this.runCurrentNoteTask("summarize");
       },
     });
 
     this.addCommand({
-      id: "review-current-note-vault-chat-agent",
-      name: "Vault Chat Agent: review current note",
+      id: "review-current-note",
+      name: "Review current note",
       callback: () => {
         void this.runCurrentNoteTask("review");
       },
     });
 
     this.addCommand({
-      id: "extract-tasks-current-note-vault-chat-agent",
-      name: "Vault Chat Agent: extract tasks from current note",
+      id: "extract-tasks-current-note",
+      name: "Extract tasks from current note",
       callback: () => {
         void this.runCurrentNoteTask("tasks");
       },
     });
 
     this.addCommand({
-      id: "improve-current-note-vault-chat-agent",
-      name: "Vault Chat Agent: propose improvements to current note",
+      id: "improve-current-note",
+      name: "Propose improvements to current note",
       callback: () => {
         void this.runCurrentNoteTask("improve");
       },
     });
 
     this.addCommand({
-      id: "text-summarize-selection-vault-chat-agent",
-      name: "Text: summarize selection with Vault Chat Agent",
+      id: "text-summarize-selection",
+      name: "Text: summarize selection",
       editorCallback: (editor, ctx) => {
         void this.runEditorTextTask(editor, ctx, "summarize");
       },
     });
 
     this.addCommand({
-      id: "text-professional-selection-vault-chat-agent",
-      name: "Text: make selection professional with Vault Chat Agent",
+      id: "text-professional-selection",
+      name: "Text: make selection professional",
       editorCallback: (editor, ctx) => {
         void this.runEditorTextTask(editor, ctx, "professional");
       },
     });
 
     this.addCommand({
-      id: "text-action-items-selection-vault-chat-agent",
-      name: "Text: extract action items from selection with Vault Chat Agent",
+      id: "text-action-items-selection",
+      name: "Text: extract action items from selection",
       editorCallback: (editor, ctx) => {
         void this.runEditorTextTask(editor, ctx, "action-items");
       },
     });
 
     this.addCommand({
-      id: "text-edit-selection-vault-chat-agent",
-      name: "Text: edit selection with prompt using Vault Chat Agent",
+      id: "text-edit-selection",
+      name: "Text: edit selection with prompt",
       editorCallback: (editor, ctx) => {
         void this.runSavedPrompt(editor, ctx, "edit");
       },
     });
 
     this.addCommand({
-      id: "prompt-run-saved-vault-chat-agent",
-      name: "Prompt: run saved prompt with Vault Chat Agent",
+      id: "prompt-run-saved",
+      name: "Prompt: run saved prompt",
       editorCallback: (editor, ctx) => {
         void this.runSavedPrompt(editor, ctx);
       },
     });
 
     this.addCommand({
-      id: "workflow-weekly-review-vault-chat-agent",
-      name: "Workflow: draft weekly review with Vault Chat Agent",
+      id: "workflow-weekly-review",
+      name: "Workflow: draft weekly review",
       callback: () => {
         void this.runWorkflow("weekly-review");
       },
     });
 
     this.addCommand({
-      id: "workflow-meeting-tasks-vault-chat-agent",
-      name: "Workflow: meeting notes to tasks with Vault Chat Agent",
+      id: "workflow-meeting-tasks",
+      name: "Workflow: meeting notes to tasks",
       callback: () => {
         void this.runWorkflow("meeting-tasks");
       },
     });
 
     this.addCommand({
-      id: "workflow-project-status-vault-chat-agent",
-      name: "Workflow: draft project status with Vault Chat Agent",
+      id: "workflow-project-status",
+      name: "Workflow: draft project status",
       callback: () => {
         void this.runWorkflow("project-status");
       },
@@ -344,7 +344,7 @@ export default class ObsidianAIAssistantPlugin extends Plugin {
   private pruneExcludedIndexEntries(): boolean {
     let changed = false;
     for (const document of this.indexStore.getAllDocuments()) {
-      if (!isIndexableVaultFileLike({ path: document.path, stat: { size: document.size } })) {
+      if (!isIndexableVaultFileLike({ path: document.path, stat: { size: document.size } }, { configDir: this.app.vault.configDir })) {
         this.indexStore.deleteFile(document.path);
         changed = true;
       }
@@ -595,7 +595,11 @@ function formatDateForPath(date: Date): string {
 }
 
 function migrateSettings(settings: PluginData["settings"]): ObsidianAIAssistantSettings {
-  const { includeContextByDefault: _includeContextByDefault, agentModeByDefault, defaultIntent: storedDefaultIntent, ...currentSettings } = settings ?? {};
+  const currentSettings = { ...(settings ?? {}) };
+  const { agentModeByDefault, defaultIntent: storedDefaultIntent } = currentSettings;
+  delete currentSettings.includeContextByDefault;
+  delete currentSettings.agentModeByDefault;
+  delete currentSettings.defaultIntent;
   const defaultIntent = isChatIntent(storedDefaultIntent) ? storedDefaultIntent : agentModeByDefault ? "edit" : "ask";
   return {
     ...DEFAULT_SETTINGS,

@@ -1,4 +1,4 @@
-import { App, Notice, PluginSettingTab, Setting, SuggestModal } from "obsidian";
+import { App, Notice, PluginSettingTab, requestUrl, Setting, SuggestModal } from "obsidian";
 import { DEFAULT_SETTINGS, ExternalMcpServerSettings, SavedPrompt } from "../core/types";
 import ObsidianAIAssistantPlugin from "../main";
 import { detectProviderPreset, fetchProviderModels, PROVIDER_PRESETS, ProviderPreset } from "./providerSettings";
@@ -65,7 +65,7 @@ export class ObsidianAIAssistantSettingTab extends PluginSettingTab {
           button.setDisabled(true);
           button.setButtonText("Loading...");
           try {
-            const models = await fetchProviderModels(this.plugin.settings);
+            const models = await fetchProviderModels(this.plugin.settings, requestUrl);
             if (models.length === 0) {
               new Notice("Vault Chat Agent: provider returned no models.", 4000);
               return;

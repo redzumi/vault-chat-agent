@@ -87,7 +87,7 @@ export class RealtimeIndexer {
       return;
     }
 
-    if (!isIndexableVaultFile(file)) {
+    if (!isIndexableVaultFile(file, this.vault.configDir)) {
       this.clearScheduledIndexes(file.path);
       this.indexStore.deleteFile(file.path);
       this.schedulePersistAndNotify();

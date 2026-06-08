@@ -11,7 +11,21 @@ export const PROVIDER_PRESETS = {
 
 export type ProviderPreset = keyof typeof PROVIDER_PRESETS;
 
-export async function fetchProviderModels(settings: { apiBaseUrl: string; apiKey: string }): Promise<string[]> {
+export interface ProviderModelRequest {
+  url: string;
+  method: "GET";
+  headers: Record<string, string>;
+  throw: false;
+}
+
+export interface ProviderModelResponse {
+  status: number;
+  text: string;
+}
+
+type Requester = (request: ProviderModelRequest) => Promise<ProviderModelResponse>;
+
+export async function fetchProviderModels(settings: { apiBaseUrl: string; apiKey: string }, requester: Requester): Promise<string[]> {
   const headers: Record<string, string> = {
     Accept: "application/json",
   };
@@ -19,18 +33,28 @@ export async function fetchProviderModels(settings: { apiBaseUrl: string; apiKey
     headers.Authorization = `Bearer ${settings.apiKey.trim()}`;
   }
 
-  const response = await fetch(buildOpenAiCompatibleEndpointUrl(settings.apiBaseUrl, "models"), {
+  const response = await requester({
+    url: buildOpenAiCompatibleEndpointUrl(settings.apiBaseUrl, "models"),
     method: "GET",
     headers,
+    throw: false,
   });
-  if (!response.ok) {
-    const errorText = await response.text();
+  if (response.status >= 400) {
+    const errorText = response.text;
     throw new Error(`Request failed (${response.status}): ${errorText}`);
   }
 
-  const data = (await response.json()) as unknown;
+  const data = parseJsonResponse(response.text);
   const models = parseModelIds(data);
   return Array.from(new Set(models)).sort((a, b) => a.localeCompare(b));
+}
+
+function parseJsonResponse(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 export function parseModelIds(data: unknown): string[] {
