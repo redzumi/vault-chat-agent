@@ -15,8 +15,6 @@ export class ObsidianAIAssistantSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    new Setting(containerEl).setName("Vault Chat Agent").setHeading();
-
     new Setting(containerEl)
       .setName("Provider preset")
       .setDesc("Sets a base URL and starter model for common OpenAI-compatible providers.")
